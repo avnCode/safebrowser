@@ -152,6 +152,12 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         val expected   = tab.expectedOrigin
         val nextOrigin = UrlNormalizer.origin(nextUrl)
 
+        // Hard block list — silent, no prompt, regardless of mode.
+        if (settings.isBlocked(nextOrigin)) {
+            Toast.makeText(this, "Blocked: $nextOrigin", Toast.LENGTH_SHORT).show()
+            return false
+        }
+
         if (expected == null) {
             tab.expectedOrigin = nextOrigin ?: tab.expectedOrigin
             return true
@@ -188,21 +194,33 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     }
 
     private fun showRedirectDialog(tab: Tab, expected: String, nextUrl: String, isUserGesture: Boolean) {
+        val nextOrigin = UrlNormalizer.origin(nextUrl) ?: nextUrl
         val reason = if (isUserGesture)
             "You tapped a link that goes to a different site."
         else
             "This page tried to send you to a different site."
+        val items = arrayOf(
+            "Allow once (this tab)",
+            "Open in new tab",
+            "Block this site forever",
+        )
         AlertDialog.Builder(this)
             .setTitle("Cross-site navigation")
-            .setMessage("From: $expected\n\nTo: $nextUrl\n\n$reason\n\nAllow?")
-            .setPositiveButton("Allow once") { _, _ ->
-                tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
-                tab.webView.loadUrl(nextUrl)
+            .setMessage("From: $expected\n\nTo: $nextUrl\n\n$reason")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
+                        tab.webView.loadUrl(nextUrl)
+                    }
+                    1 -> tabs.newTab(nextUrl)
+                    2 -> {
+                        settings.blockOrigin(nextOrigin)
+                        Toast.makeText(this, "Blocked $nextOrigin", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
-            .setNeutralButton("Open in new tab") { _, _ ->
-                tabs.newTab(nextUrl)
-            }
-            .setNegativeButton("Block", null)
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
