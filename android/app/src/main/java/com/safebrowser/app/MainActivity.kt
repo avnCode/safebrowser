@@ -20,6 +20,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -85,6 +86,22 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         refreshModeButton()
         tabs.newTab(NEW_TAB_URL, activate = true)
 
+        // Predictive-back / hardware back: walk WebView history first.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (fullscreenView != null) { onHideFullscreen(); return }
+                val wv = tabs.active?.webView
+                if (wv != null && wv.canGoBack()) { wv.goBack(); return }
+                tabs.active?.let {
+                    if (tabs.tabs.size > 1) { tabs.close(it); return }
+                }
+                // Last tab, no history → let the system minimise.
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+                isEnabled = true
+            }
+        })
+
         // If we were launched with a URL from another app, open it.
         intent?.dataString?.takeIf { it.isNotBlank() }?.let { tabs.newTab(it) }
     }
@@ -112,13 +129,6 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            if (fullscreenView != null) { onHideFullscreen(); return true }
-            val wv = tabs.active?.webView
-            if (wv != null && wv.canGoBack()) { wv.goBack(); return true }
-            // Otherwise close the active tab; if it was the last one a new home opens.
-            tabs.active?.let { tabs.close(it); return true }
-        }
         return super.onKeyDown(keyCode, event)
     }
 
@@ -194,6 +204,24 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         Toast.makeText(this, "Popup blocked", Toast.LENGTH_SHORT).show()
     }
 
+    override fun onLinkLongPressed(tab: Tab, linkUrl: String) {
+        val items = arrayOf("Open in new tab", "Copy link")
+        AlertDialog.Builder(this)
+            .setTitle(linkUrl)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> tabs.newTab(linkUrl)
+                    1 -> {
+                        val cm = getSystemService(ClipboardManager::class.java)
+                        cm?.setPrimaryClip(ClipData.newPlainText("link", linkUrl))
+                        Toast.makeText(this, "Link copied", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     // ---- HTML5 fullscreen --------------------------------------------------
 
     private var fullscreenView: View? = null
@@ -254,35 +282,23 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             "You tapped a link that goes to a different site."
         else
             "This page tried to send you to a different site."
-        val items = arrayOf(
-            "Allow once",
-            "Always allow this site",
-            "Open in new tab",
-            "Block this site",
-        )
         AlertDialog.Builder(this)
             .setTitle("Cross-site navigation")
-            .setMessage("From: $expected\nTo: $nextUrl\n\n$reason")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> {
-                        tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
-                        tab.webView.loadUrl(nextUrl)
-                    }
-                    1 -> {
-                        settings.allowOrigin(nextOrigin)
-                        Toast.makeText(this, "Always allowing $nextOrigin", Toast.LENGTH_SHORT).show()
-                        tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
-                        tab.webView.loadUrl(nextUrl)
-                    }
-                    2 -> tabs.newTab(nextUrl)
-                    3 -> {
-                        settings.blockOrigin(nextOrigin)
-                        Toast.makeText(this, "Blocked $nextOrigin", Toast.LENGTH_SHORT).show()
-                    }
-                }
+            .setMessage("From: $expected\n\nTo: $nextUrl\n\n$reason")
+            .setPositiveButton("Allow once") { _, _ ->
+                tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
+                tab.webView.loadUrl(nextUrl)
             }
-            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Always allow") { _, _ ->
+                settings.allowOrigin(nextOrigin)
+                Toast.makeText(this, "Always allowing $nextOrigin", Toast.LENGTH_SHORT).show()
+                tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
+                tab.webView.loadUrl(nextUrl)
+            }
+            .setNegativeButton("Block site") { _, _ ->
+                settings.blockOrigin(nextOrigin)
+                Toast.makeText(this, "Blocked $nextOrigin", Toast.LENGTH_SHORT).show()
+            }
             .show()
     }
 

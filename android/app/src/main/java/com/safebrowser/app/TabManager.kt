@@ -47,6 +47,7 @@ class TabManager(
         fun onPopupBlocked()
         fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback)
         fun onHideFullscreen()
+        fun onLinkLongPressed(tab: Tab, linkUrl: String)
     }
 
     private var nextId = 1L
@@ -122,6 +123,19 @@ class TabManager(
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
             userAgentString = CHROME_UA
+        }
+
+        // Long-press on a link → context menu (Open in new tab / Copy link).
+        wv.setOnLongClickListener {
+            val res = wv.hitTestResult
+            val type = res.type
+            val link = res.extra
+            if (!link.isNullOrBlank() && (
+                    type == WebView.HitTestResult.SRC_ANCHOR_TYPE ||
+                    type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE)) {
+                val tab = wv.tag as? Tab
+                if (tab != null) { callbacks.onLinkLongPressed(tab, link); true } else false
+            } else false
         }
 
         wv.webChromeClient = object : WebChromeClient() {
