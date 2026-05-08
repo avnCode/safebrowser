@@ -71,7 +71,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         webContainer= findViewById(R.id.web_container)
         tabStrip    = findViewById(R.id.tab_strip)
 
-        tabs = TabManager(this, webContainer, tabStrip, this, adBlocker)
+        tabs = TabManager(this, webContainer, tabStrip, this, adBlocker, settings)
 
         btnBack.setOnClickListener   { tabs.active?.webView?.takeIf { it.canGoBack() }?.goBack() }
         btnFwd.setOnClickListener    { tabs.active?.webView?.takeIf { it.canGoForward() }?.goForward() }
@@ -121,29 +121,26 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
 
     override fun onPause() {
         super.onPause()
-        runCatching { tabs.active?.webView?.onPause(); tabs.active?.webView?.pauseTimers() }
+        if (settings.backgroundPlaybackEnabled) return  // keep playing in background
+        tabs.pauseActive()
     }
 
     override fun onResume() {
         super.onResume()
-        runCatching { tabs.active?.webView?.onResume(); tabs.active?.webView?.resumeTimers() }
+        tabs.resumeActive()
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        // OS is asking us to free memory.  Drop disk cache from inactive WebViews
-        // and trigger Java GC.
         if (level >= TRIM_MEMORY_RUNNING_LOW) {
-            runCatching {
-                for (t in tabs.tabs) if (t != tabs.active) t.webView.clearCache(false)
-            }
+            tabs.trimInactive(level)
         }
     }
 
     private fun submitAddress() {
         val url = UrlNormalizer.normalize(addr.text.toString())
         if (url.isBlank()) return
-        val tab = tabs.active ?: tabs.newTab(url)
+        val tab = tabs.active ?: tabs.newTab(url) ?: return
         tab.expectedOrigin = UrlNormalizer.origin(url) ?: tab.expectedOrigin
         tab.url = url
         tab.webView.loadUrl(url)
@@ -250,7 +247,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             .setTitle("Bookmarks")
             .setItems(labels) { _, idx ->
                 val item = list[idx]
-                val tab = tabs.active ?: tabs.newTab(item.url)
+                val tab = tabs.active ?: tabs.newTab(item.url) ?: return@setItems
                 tab.expectedOrigin = UrlNormalizer.origin(item.url) ?: tab.expectedOrigin
                 tab.webView.loadUrl(item.url)
             }
@@ -277,7 +274,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             .setTitle("History")
             .setItems(labels) { _, idx ->
                 val item = list[idx]
-                val tab = tabs.active ?: tabs.newTab(item.url)
+                val tab = tabs.active ?: tabs.newTab(item.url) ?: return@setItems
                 tab.expectedOrigin = UrlNormalizer.origin(item.url) ?: tab.expectedOrigin
                 tab.webView.loadUrl(item.url)
             }
@@ -297,20 +294,45 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             .show()
     }
 
+    private fun toggleBackgroundPlayback() {
+        if (settings.backgroundPlaybackEnabled) {
+            settings.backgroundPlaybackEnabled = false
+            Toast.makeText(this, "Background playback OFF", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Allow background playback?")
+            .setMessage("When enabled, audio/video keeps playing after you switch away from " +
+                        "SafeBrowser. The OS may still kill the app to save battery.\n\n" +
+                        "Disable when finished to avoid silent battery drain.")
+            .setPositiveButton("Enable") { _, _ ->
+                settings.backgroundPlaybackEnabled = true
+                Toast.makeText(this, "Background playback ON", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun showOverflowMenu(anchor: View) {
         val menu = PopupMenu(this, anchor)
         val isStrict = settings.mode == Mode.Strict
         menu.menu.add(0, 1, 0, if (isStrict) "Mode: Strict (tap for Lenient)" else "Mode: Lenient (tap for Strict)")
         menu.menu.add(0, 2, 1, if (settings.adBlockEnabled) "Ad blocker: ON" else "Ad blocker: OFF")
-        menu.menu.add(0, 8, 2, if (settings.historyEnabled) "History: ON" else "History: OFF")
-        menu.menu.add(0, 9, 3, "Bookmarks")
-        menu.menu.add(0, 10, 4, "History")
-        menu.menu.add(0, 11, 5, "Clear history")
-        menu.menu.add(0, 3, 6, "New tab")
-        menu.menu.add(0, 4, 7, "Close current tab")
-        menu.menu.add(0, 5, 8, "Reload")
-        menu.menu.add(0, 6, 9, "Copy URL")
-        menu.menu.add(0, 7, 10, "Share")
+        menu.menu.add(0, 13, 2, if (settings.overlayBlockerEnabled) "Overlay blocker: ON" else "Overlay blocker: OFF")
+        menu.menu.add(0, 14, 3, if (settings.backgroundPlaybackEnabled) "Background playback: ON" else "Background playback: OFF")
+        menu.menu.add(0, 8, 4, if (settings.historyEnabled) "History: ON" else "History: OFF")
+        menu.menu.add(0, 9, 5, "Bookmarks")
+        menu.menu.add(0, 10, 6, "History")
+        menu.menu.add(0, 11, 7, "Clear history")
+        menu.menu.add(0, 15, 8, "Allowed sites (${settings.allowedOrigins().size})")
+        menu.menu.add(0, 16, 9, "Blocked sites (${settings.blockedOrigins().size})")
+        menu.menu.add(0, 12, 10, "Open Downloads")
+        menu.menu.add(0, 3, 11, "New tab")
+        menu.menu.add(0, 4, 12, "Close current tab")
+        menu.menu.add(0, 5, 13, "Reload")
+        menu.menu.add(0, 17, 14, "Hide overlays now")
+        menu.menu.add(0, 6, 15, "Copy URL")
+        menu.menu.add(0, 7, 16, "Share")
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> {
@@ -352,6 +374,32 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
                 9 -> showBookmarks()
                 10 -> showHistory()
                 11 -> confirmClearHistory()
+                12 -> {
+                    runCatching {
+                        startActivity(Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }.onFailure {
+                        Toast.makeText(this, "Could not open Downloads", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                13 -> {
+                    settings.overlayBlockerEnabled = !settings.overlayBlockerEnabled
+                    Toast.makeText(this,
+                        "Overlay blocker ${if (settings.overlayBlockerEnabled) "ON" else "OFF"}",
+                        Toast.LENGTH_SHORT).show()
+                }
+                14 -> toggleBackgroundPlayback()
+                15 -> showAllowList()
+                16 -> showBlockList()
+                17 -> {
+                    val js = runCatching {
+                        assets.open("overlay_zapper.js").bufferedReader().use { it.readText() }
+                    }.getOrNull()
+                    if (!js.isNullOrBlank()) {
+                        tabs.active?.webView?.evaluateJavascript(js, null)
+                        Toast.makeText(this, "Overlays hidden", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
             true
         }
@@ -437,19 +485,48 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         Toast.makeText(this, "Popup blocked", Toast.LENGTH_SHORT).show()
     }
 
-    override fun onLinkLongPressed(tab: Tab, linkUrl: String) {
-        val items = arrayOf("Open in new tab", "Copy link")
+    override fun onLinkLongPressed(tab: Tab, linkUrl: String, imageUrl: String?) {
+        val opts = mutableListOf<Pair<String, () -> Unit>>()
+        opts += "Open in new tab" to { tabs.newTab(linkUrl) }
+        opts += "Copy link" to {
+            val cm = getSystemService(ClipboardManager::class.java)
+            cm?.setPrimaryClip(ClipData.newPlainText("link", linkUrl))
+            Toast.makeText(this, "Link copied", Toast.LENGTH_SHORT).show()
+        }
+        opts += "Save link" to {
+            Downloader.enqueue(this, linkUrl,
+                userAgent = tab.webView.settings.userAgentString,
+                referer = tab.url)
+        }
+        if (!imageUrl.isNullOrBlank() && imageUrl != linkUrl) {
+            opts += "Save image" to {
+                Downloader.enqueue(this, imageUrl,
+                    userAgent = tab.webView.settings.userAgentString,
+                    referer = tab.url)
+            }
+        }
+        val labels = opts.map { it.first }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle(linkUrl)
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> tabs.newTab(linkUrl)
-                    1 -> {
-                        val cm = getSystemService(ClipboardManager::class.java)
-                        cm?.setPrimaryClip(ClipData.newPlainText("link", linkUrl))
-                        Toast.makeText(this, "Link copied", Toast.LENGTH_SHORT).show()
-                    }
-                }
+            .setItems(labels) { _, idx -> opts[idx].second() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    override fun onDownloadRequested(
+        url: String, userAgent: String?, contentDisposition: String?,
+        mimeType: String?, contentLength: Long,
+    ) {
+        val sizeStr = if (contentLength > 0) {
+            val mb = contentLength / (1024.0 * 1024.0)
+            String.format("%.1f MB", mb)
+        } else "unknown size"
+        AlertDialog.Builder(this)
+            .setTitle("Download?")
+            .setMessage("$url\n\n$sizeStr")
+            .setPositiveButton("Download") { _, _ ->
+                Downloader.enqueue(this, url, userAgent, contentDisposition, mimeType,
+                    referer = tabs.active?.url)
             }
             .setNegativeButton("Cancel", null)
             .show()

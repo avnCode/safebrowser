@@ -1,6 +1,7 @@
 package com.safebrowser.app
 
 import android.annotation.SuppressLint
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.graphics.Bitmap
 import android.view.LayoutInflater
@@ -17,29 +18,34 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 
 const val NEW_TAB_URL = "file:///android_asset/newtab.html"
+const val MAX_TABS = 8
 
 private const val CHROME_UA =
     "Mozilla/5.0 (Linux; Android 13; SM-X716B) AppleWebKit/537.36 " +
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-class Tab(val id: Long, val webView: WebView, val chip: View, val title: TextView) {
+class Tab(
+    val id: Long,
+    val webView: WebView,
+    val host: SwipeRefreshLayout,
+    val chip: View,
+    val title: TextView,
+) {
     var url: String = ""
     var pageTitle: String = "New Tab"
     var expectedOrigin: String? = null
 }
 
-/**
- * Owns all tabs.  Each tab is its own WebView; the active one is the only
- * child of [container].
- */
 class TabManager(
     private val ctx: Context,
     private val container: FrameLayout,
     private val tabStrip: LinearLayout,
     private val callbacks: Callbacks,
     private val adBlocker: AdBlocker,
+    private val settings: Settings,
 ) {
     interface Callbacks {
         fun onActiveChanged(tab: Tab?)
@@ -49,7 +55,11 @@ class TabManager(
         fun onPopupBlocked()
         fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback)
         fun onHideFullscreen()
-        fun onLinkLongPressed(tab: Tab, linkUrl: String)
+        fun onLinkLongPressed(tab: Tab, linkUrl: String, imageUrl: String?)
+        fun onDownloadRequested(
+            url: String, userAgent: String?, contentDisposition: String?,
+            mimeType: String?, contentLength: Long,
+        )
     }
 
     private var nextId = 1L
@@ -57,13 +67,36 @@ class TabManager(
     var active: Tab? = null
         private set
 
-    fun newTab(url: String = NEW_TAB_URL, activate: Boolean = true): Tab {
+    private val overlayZapperJs: String by lazy {
+        runCatching {
+            ctx.assets.open("overlay_zapper.js").bufferedReader().use { it.readText() }
+        }.getOrDefault("")
+    }
+
+    fun newTab(url: String = NEW_TAB_URL, activate: Boolean = true): Tab? {
+        if (tabs.size >= MAX_TABS) {
+            Toast.makeText(ctx, "Tab limit ($MAX_TABS). Close one first.", Toast.LENGTH_SHORT).show()
+            return null
+        }
         val wv = createWebView()
+        val host = SwipeRefreshLayout(ctx).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            addView(wv,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT)
+            setOnRefreshListener {
+                wv.reload()
+                postDelayed({ isRefreshing = false }, 1500)
+            }
+        }
         val chip = LayoutInflater.from(ctx).inflate(R.layout.tab_chip, tabStrip, false)
         val titleView = chip.findViewById<TextView>(R.id.tab_title)
         val closeBtn  = chip.findViewById<ImageButton>(R.id.tab_close)
 
-        val tab = Tab(nextId++, wv, chip, titleView)
+        val tab = Tab(nextId++, wv, host, chip, titleView)
         tab.url = url
         tab.expectedOrigin = UrlNormalizer.origin(url)
         wv.tag = tab
@@ -83,8 +116,7 @@ class TabManager(
         if (active == tab) return
         active?.let {
             it.chip.isSelected = false
-            container.removeView(it.webView)
-            // Pause timers and media on the tab we are leaving.
+            container.removeView(it.host)
             runCatching {
                 it.webView.onPause()
                 it.webView.pauseTimers()
@@ -92,8 +124,8 @@ class TabManager(
         }
         active = tab
         tab.chip.isSelected = true
-        if (tab.webView.parent != null) (tab.webView.parent as ViewGroup).removeView(tab.webView)
-        container.addView(tab.webView)
+        if (tab.host.parent != null) (tab.host.parent as ViewGroup).removeView(tab.host)
+        container.addView(tab.host)
         runCatching {
             tab.webView.onResume()
             tab.webView.resumeTimers()
@@ -107,12 +139,36 @@ class TabManager(
         tabStrip.removeView(tab.chip)
         tabs.remove(tab)
         if (active == tab) {
-            container.removeView(tab.webView)
+            container.removeView(tab.host)
             active = null
         }
+        runCatching { (tab.webView.parent as? ViewGroup)?.removeView(tab.webView) }
         tab.webView.destroy()
         if (tabs.isEmpty()) newTab(NEW_TAB_URL, true)
         else if (active == null) activate(tabs[idx.coerceAtMost(tabs.size - 1)])
+    }
+
+    fun pauseActive() {
+        runCatching {
+            active?.webView?.onPause()
+            active?.webView?.pauseTimers()
+        }
+    }
+    fun resumeActive() {
+        runCatching {
+            active?.webView?.onResume()
+            active?.webView?.resumeTimers()
+        }
+    }
+
+    /** Aggressively free memory for inactive tabs. */
+    fun trimInactive(level: Int) {
+        for (t in tabs) if (t != active) {
+            runCatching {
+                t.webView.clearCache(level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE)
+                t.webView.freeMemory()
+            }
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -131,26 +187,34 @@ class TabManager(
             displayZoomControls = false
             javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
-            // Many video sites serve segments over http from https pages; blocking
-            // outright freezes the player.  COMPATIBILITY lets non-script subresources
-            // through but still blocks active mixed content (scripts/iframes).
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             cacheMode = WebSettings.LOAD_DEFAULT
             mediaPlaybackRequiresUserGesture = false
             userAgentString = CHROME_UA
         }
 
-        // Long-press on a link → context menu (Open in new tab / Copy link).
         wv.setOnLongClickListener {
             val res = wv.hitTestResult
             val type = res.type
-            val link = res.extra
-            if (!link.isNullOrBlank() && (
-                    type == WebView.HitTestResult.SRC_ANCHOR_TYPE ||
-                    type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE)) {
-                val tab = wv.tag as? Tab
-                if (tab != null) { callbacks.onLinkLongPressed(tab, link); true } else false
-            } else false
+            val extra = res.extra
+            val tab = wv.tag as? Tab
+            if (tab == null || extra.isNullOrBlank()) return@setOnLongClickListener false
+            when (type) {
+                WebView.HitTestResult.SRC_ANCHOR_TYPE -> {
+                    callbacks.onLinkLongPressed(tab, extra, null); true
+                }
+                WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
+                    callbacks.onLinkLongPressed(tab, extra, extra); true
+                }
+                WebView.HitTestResult.IMAGE_TYPE -> {
+                    callbacks.onLinkLongPressed(tab, extra, extra); true
+                }
+                else -> false
+            }
+        }
+
+        wv.setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
+            callbacks.onDownloadRequested(url, userAgent, contentDisposition, mimeType, contentLength)
         }
 
         wv.webChromeClient = object : WebChromeClient() {
@@ -165,6 +229,7 @@ class TabManager(
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 val tab = view.tag as? Tab ?: return
                 callbacks.onProgress(tab, newProgress)
+                if (newProgress >= 100) tab.host.isRefreshing = false
             }
 
             override fun onReceivedTitle(view: WebView, title: String?) {
@@ -207,8 +272,11 @@ class TabManager(
             override fun onPageFinished(view: WebView, url: String) {
                 val tab = view.tag as? Tab ?: return
                 tab.url = url
-                // Strip popup-opener once page is done loading.
+                tab.host.isRefreshing = false
                 view.evaluateJavascript("try{window.open=function(){return null};}catch(e){}", null)
+                if (settings.overlayBlockerEnabled && overlayZapperJs.isNotBlank()) {
+                    view.evaluateJavascript(overlayZapperJs, null)
+                }
                 callbacks.onUrlChanged(tab)
             }
         }

@@ -19,6 +19,14 @@ class Settings(ctx: Context) {
         get() = sp.getBoolean("history", true)
         set(value) { sp.edit().putBoolean("history", value).apply() }
 
+    var overlayBlockerEnabled: Boolean
+        get() = sp.getBoolean("overlay_blocker", true)
+        set(value) { sp.edit().putBoolean("overlay_blocker", value).apply() }
+
+    var backgroundPlaybackEnabled: Boolean
+        get() = sp.getBoolean("background_playback", false)
+        set(value) { sp.edit().putBoolean("background_playback", value).apply() }
+
     fun blockedOrigins(): Set<String> =
         sp.getStringSet("blocked_origins", emptySet()) ?: emptySet()
 

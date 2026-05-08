@@ -11,8 +11,8 @@ android {
         applicationId = "com.safebrowser.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.0.13"
+        versionCode = 16
+        versionName = "1.0.15"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -36,4 +36,5 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.webkit:webkit:1.11.0")
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
 }
