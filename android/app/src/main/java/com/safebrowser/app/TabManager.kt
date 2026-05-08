@@ -14,6 +14,10 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.RenderProcessGoneDetail
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import androidx.webkit.WebViewRenderProcess
+import androidx.webkit.WebViewRenderProcessClient
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -86,6 +90,7 @@ class TabManager(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
             addView(wv,
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT)
@@ -119,19 +124,13 @@ class TabManager(
         active?.let {
             it.chip.isSelected = false
             container.removeView(it.host)
-            runCatching {
-                it.webView.onPause()
-                it.webView.pauseTimers()
-            }
+            runCatching { it.webView.onPause() }
         }
         active = tab
         tab.chip.isSelected = true
         if (tab.host.parent != null) (tab.host.parent as ViewGroup).removeView(tab.host)
         container.addView(tab.host)
-        runCatching {
-            tab.webView.onResume()
-            tab.webView.resumeTimers()
-        }
+        runCatching { tab.webView.onResume() }
         callbacks.onActiveChanged(tab)
     }
 
@@ -151,16 +150,10 @@ class TabManager(
     }
 
     fun pauseActive() {
-        runCatching {
-            active?.webView?.onPause()
-            active?.webView?.pauseTimers()
-        }
+        runCatching { active?.webView?.onPause() }
     }
     fun resumeActive() {
-        runCatching {
-            active?.webView?.onResume()
-            active?.webView?.resumeTimers()
-        }
+        runCatching { active?.webView?.onResume() }
     }
 
     /** Aggressively free memory for inactive tabs. */
@@ -194,7 +187,7 @@ class TabManager(
         )
         tab.webView = fresh
         fresh.tag = tab
-        if (wasActive) runCatching { fresh.onResume(); fresh.resumeTimers() }
+        if (wasActive) runCatching { fresh.onResume() }
         fresh.loadUrl(savedUrl)
     }
 
@@ -205,6 +198,10 @@ class TabManager(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
         )
+        // Force a hardware layer so video frames are GPU-composited.  Without
+        // this the WebView can fall back to a software layer (especially when
+        // wrapped in SwipeRefreshLayout), which OOMs the renderer on video.
+        wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         wv.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -218,6 +215,44 @@ class TabManager(
             cacheMode = WebSettings.LOAD_DEFAULT
             mediaPlaybackRequiresUserGesture = false
             userAgentString = CHROME_UA
+            // ---- Memory-pressure mitigations (renderer crashes on video sites) ----
+            // Don't pre-rasterize tiles outside the viewport (default false, but be explicit).
+            offscreenPreRaster = false
+            // Disable file:// access from network pages.
+            allowFileAccess = false
+            allowContentAccess = false
+            allowFileAccessFromFileURLs = false
+            allowUniversalAccessFromFileURLs = false
+            // Smaller image cache footprint on big pages.
+            blockNetworkImage = false
+            loadsImagesAutomatically = true
+        }
+        // Disable Safe Browsing — it spawns a separate service process and on
+        // memory-tight devices that pressure contributes to renderer OOM kills.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
+            runCatching { androidx.webkit.WebSettingsCompat.setSafeBrowsingEnabled(wv.settings, false) }
+        }
+
+        // Detect a hung renderer and terminate it ourselves *before* the OS
+        // does it violently — this turns a hard crash into a clean reload.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_CLIENT_BASIC_USAGE)) {
+            WebViewCompat.setWebViewRenderProcessClient(
+                wv,
+                object : WebViewRenderProcessClient() {
+                    override fun onRenderProcessUnresponsive(
+                        view: WebView,
+                        renderer: WebViewRenderProcess?,
+                    ) {
+                        // Renderer hasn't pumped events for ~5s. Kill it so
+                        // onRenderProcessGone fires and we rebuild cleanly.
+                        runCatching { renderer?.terminate() }
+                    }
+                    override fun onRenderProcessResponsive(
+                        view: WebView,
+                        renderer: WebViewRenderProcess?,
+                    ) {}
+                },
+            )
         }
 
         wv.setOnLongClickListener {
@@ -300,7 +335,9 @@ class TabManager(
                 val tab = view.tag as? Tab ?: return
                 tab.url = url
                 tab.host.isRefreshing = false
-                view.evaluateJavascript("try{window.open=function(){return null};}catch(e){}", null)
+                // Only run the overlay zapper if explicitly enabled.  Per-page JS
+                // injection is otherwise avoided \u2014 we already block popups via
+                // setSupportMultipleWindows(false) + javaScriptCanOpenWindowsAutomatically=false.
                 if (settings.overlayBlockerEnabled && overlayZapperJs.isNotBlank()) {
                     view.evaluateJavascript(overlayZapperJs, null)
                 }
