@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>New Tab</title>
+<style>
+  :root { color-scheme: light dark; }
+  *,*::before,*::after { box-sizing: border-box; }
+  html, body { margin:0; height:100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background:
+      linear-gradient(rgba(0,0,0,.35), rgba(0,0,0,.55)),
+      url("https://images.unsplash.com/photo-1506905925346-21bda4d32df4?auto=format&fit=crop&w=1600&q=70") center/cover no-repeat;
+    color:#fff;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; padding: 24px;
+  }
+  h1 {
+    font-weight: 500; font-size: clamp(40px, 10vw, 64px);
+    letter-spacing: -1px; margin: 0 0 18px;
+    text-shadow: 0 2px 14px rgba(0,0,0,.35);
+  }
+  h1 span:nth-child(1){color:#4285F4}
+  h1 span:nth-child(2){color:#EA4335}
+  h1 span:nth-child(3){color:#FBBC05}
+  h1 span:nth-child(4){color:#4285F4}
+  h1 span:nth-child(5){color:#34A853}
+  h1 span:nth-child(6){color:#EA4335}
+  form {
+    width:min(560px, 100%);
+    background: rgba(255,255,255,.96); color:#202124;
+    border-radius: 999px; display:flex; align-items:center; padding: 6px 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  }
+  input {
+    flex:1; border:0; outline:0; padding: 14px 8px; font-size: 16px; background:transparent;
+  }
+  button {
+    border:0; background:#1a73e8; color:#fff; padding: 10px 16px; border-radius: 999px;
+    font-weight: 600; font-size: 14px;
+  }
+  p.tip { margin-top: 22px; opacity:.85; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1><span>S</span><span>a</span><span>f</span><span>e</span> <span>G</span><span>o</span></h1>
+  <form action="https://www.google.com/search" method="GET">
+    <input name="q" autocomplete="off" autofocus placeholder="Search Google or paste a URL">
+    <button type="submit">Go</button>
+  </form>
+  <p class="tip">Tip: long-press the address bar above for clipboard paste.</p>
+</body>
+</html>

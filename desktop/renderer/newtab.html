@@ -1,0 +1,155 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>New Tab</title>
+  <style>
+    html, body {
+      margin: 0; height: 100%; font-family: -apple-system, system-ui, sans-serif;
+      color: #fff; overflow: hidden;
+    }
+    body {
+      background:
+        linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.65)),
+        url('https://images.unsplash.com/photo-1506905925346-21bda4d32df4?auto=format&fit=crop&w=2400&q=80') center/cover no-repeat,
+        #111;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center;
+    }
+    h1 {
+      font-size: 64px; font-weight: 200; letter-spacing: 4px;
+      margin: 0 0 24px 0; text-shadow: 0 2px 16px rgba(0,0,0,.6);
+    }
+    h1 .b { color: #4285F4; } h1 .r { color: #EA4335; }
+    h1 .y { color: #FBBC05; } h1 .g { color: #34A853; }
+
+    form {
+      display: flex; gap: 8px; width: min(640px, 80vw);
+      background: rgba(255,255,255,0.92); border-radius: 999px;
+      padding: 6px 8px 6px 18px; box-shadow: 0 12px 40px rgba(0,0,0,.4);
+    }
+    input {
+      flex: 1; border: 0; outline: none; background: transparent;
+      font-size: 16px; color: #222; padding: 12px 4px;
+    }
+    button {
+      border: 0; border-radius: 999px; padding: 10px 18px;
+      background: #4285F4; color: #fff; font-weight: 500; cursor: pointer;
+    }
+    button:hover { background: #3367d6; }
+
+    .settings {
+      margin-top: 28px; background: rgba(0,0,0,0.45);
+      backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px; padding: 14px 18px; max-width: 640px;
+    }
+    .settings h3 {
+      margin: 0 0 8px 0; font-size: 13px; font-weight: 500;
+      letter-spacing: 1.5px; text-transform: uppercase; opacity: .8;
+    }
+    .modes { display: flex; gap: 10px; }
+    .mode {
+      flex:1; cursor: pointer; padding: 12px 14px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04);
+      transition: background .15s, border-color .15s;
+      text-align: left;
+    }
+    .mode:hover { background: rgba(255,255,255,0.08); }
+    .mode.active {
+      border-color: #4285F4; background: rgba(66,133,244,0.18);
+    }
+    .mode .name { font-weight: 600; font-size: 14px; }
+    .mode .desc { font-size: 12px; opacity: .75; margin-top: 4px; line-height: 1.4; }
+
+    .credit {
+      position: fixed; bottom: 10px; right: 14px;
+      font-size: 11px; opacity: .55;
+    }
+  </style>
+</head>
+<body>
+  <h1>
+    <span class="b">S</span><span class="r">a</span><span class="y">f</span><span class="g">e</span><span class="b">B</span><span class="r">r</span><span class="y">o</span><span class="g">w</span>ser
+  </h1>
+
+  <form id="f">
+    <input id="q" autofocus placeholder="Search Google or type a URL" />
+    <button type="submit">Search</button>
+  </form>
+
+  <div class="settings">
+    <h3>Browsing Mode</h3>
+    <div class="modes">
+      <div class="mode" data-mode="strict">
+        <div class="name">🔒 Strict <span style="opacity:.5;font-weight:400">(default)</span></div>
+        <div class="desc">Block every page-initiated redirect, popup, and new tab. You'll be asked before any navigation you didn't start.</div>
+      </div>
+      <div class="mode" data-mode="lenient">
+        <div class="name">🛟 Lenient</div>
+        <div class="desc">Allow same-site redirects automatically (e.g. YouTube SPA navigation). Cross-site redirects and popups still blocked.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="credit">Photo: Unsplash</div>
+
+  <script>
+    const f = document.getElementById('f');
+    const q = document.getElementById('q');
+
+    // Submit search/URL: navigate this webview to the target. Our chrome
+    // whitelists nav from this newtab.html, so this just works.
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = q.value.trim();
+      if (!v) return;
+      const looksLikeUrl = /^https?:\/\//i.test(v) ||
+        (!/\s/.test(v) && /^[\w.-]+\.[a-z]{2,}([\/?#].*)?$/i.test(v));
+      const target = /^https?:\/\//i.test(v) ? v
+        : looksLikeUrl ? 'https://' + v
+        : 'https://www.google.com/search?q=' + encodeURIComponent(v);
+      location.assign(target);
+    });
+
+    // Mode toggle: persist via the safe API exposed by preload-chrome.js.
+    // (The newtab page runs inside a <webview>, but it inherits the same
+    // preload because we register handlers on the chrome side and forward.
+    // For simplicity here we use IPC via window.safe if present; otherwise
+    // we fall back to localStorage and let the chrome window read it.)
+    const modeEls = [...document.querySelectorAll('.mode')];
+    function paint(mode) {
+      modeEls.forEach(el => el.classList.toggle('active', el.dataset.mode === mode));
+    }
+    async function init() {
+      // window.safe is only present if preload is attached to this webview.
+      // We register a tiny inline preload below via electron's <webview> attr,
+      // so try that first; otherwise use localStorage as a soft fallback.
+      let mode = 'strict';
+      try {
+        if (window.safe && window.safe.getSettings) {
+          const s = await window.safe.getSettings();
+          mode = s.mode || 'strict';
+        } else {
+          mode = localStorage.getItem('safebrowser.mode') || 'strict';
+        }
+      } catch(_) {}
+      paint(mode);
+    }
+    modeEls.forEach(el => el.onclick = async () => {
+      const mode = el.dataset.mode;
+      paint(mode);
+      try {
+        if (window.safe && window.safe.setSettings) {
+          await window.safe.setSettings({ mode });
+        } else {
+          localStorage.setItem('safebrowser.mode', mode);
+          // Notify the chrome via postMessage upstream — the webview's host listens.
+          window.parent && window.parent.postMessage({ type: 'safebrowser:mode', mode }, '*');
+        }
+      } catch(_) {}
+    });
+    init();
+  </script>
+</body>
+</html>

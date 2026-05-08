@@ -1,0 +1,4 @@
+-keepattributes Signature
+-keepattributes *Annotation*
+-dontwarn org.json.**
+-keep class androidx.webkit.** { *; }
