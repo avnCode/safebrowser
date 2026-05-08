@@ -143,6 +143,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         val tab = tabs.active ?: tabs.newTab(url) ?: return
         tab.expectedOrigin = UrlNormalizer.origin(url) ?: tab.expectedOrigin
         tab.url = url
+        runCatching { tab.webView.stopLoading() }
         tab.webView.loadUrl(url)
         // hide keyboard
         val imm = getSystemService(InputMethodManager::class.java)

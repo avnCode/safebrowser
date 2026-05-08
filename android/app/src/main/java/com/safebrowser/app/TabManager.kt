@@ -119,17 +119,33 @@ class TabManager(
         return tab
     }
 
+    private var swapping = false
+
     fun activate(tab: Tab) {
         if (active == tab) return
+        if (swapping) {
+            // Coalesce — drop earlier swap, run the latest one on the next frame.
+            container.removeCallbacks(pendingActivate)
+        }
+        pendingActivate = Runnable { doActivate(tab) }
+        swapping = true
+        container.post(pendingActivate)
+    }
+
+    private var pendingActivate: Runnable = Runnable {}
+
+    private fun doActivate(tab: Tab) {
+        swapping = false
+        if (active == tab || !tabs.contains(tab)) return
         active?.let {
             it.chip.isSelected = false
-            container.removeView(it.host)
+            runCatching { container.removeView(it.host) }
             runCatching { it.webView.onPause() }
         }
         active = tab
         tab.chip.isSelected = true
-        if (tab.host.parent != null) (tab.host.parent as ViewGroup).removeView(tab.host)
-        container.addView(tab.host)
+        runCatching { (tab.host.parent as? ViewGroup)?.removeView(tab.host) }
+        runCatching { container.addView(tab.host) }
         runCatching { tab.webView.onResume() }
         callbacks.onActiveChanged(tab)
     }
@@ -137,16 +153,32 @@ class TabManager(
     fun close(tab: Tab) {
         val idx = tabs.indexOf(tab)
         if (idx < 0) return
-        tabStrip.removeView(tab.chip)
+        runCatching { tabStrip.removeView(tab.chip) }
         tabs.remove(tab)
         if (active == tab) {
-            container.removeView(tab.host)
+            runCatching { container.removeView(tab.host) }
             active = null
         }
-        runCatching { (tab.webView.parent as? ViewGroup)?.removeView(tab.webView) }
-        tab.webView.destroy()
+        destroyWebViewSafely(tab.webView)
         if (tabs.isEmpty()) newTab(NEW_TAB_URL, true)
         else if (active == null) activate(tabs[idx.coerceAtMost(tabs.size - 1)])
+    }
+
+    /**
+     * Destroying a WebView while it's still loading or while a renderer
+     * callback is in flight crashes the app.  Stop everything, detach
+     * listeners, then destroy on the next main-loop tick.
+     */
+    private fun destroyWebViewSafely(wv: WebView) {
+        runCatching {
+            wv.stopLoading()
+            wv.webChromeClient = null
+            wv.webViewClient = WebViewClient()
+            wv.loadUrl("about:blank")
+            wv.clearHistory()
+            (wv.parent as? ViewGroup)?.removeView(wv)
+        }
+        wv.post { runCatching { wv.destroy() } }
     }
 
     fun pauseActive() {
@@ -174,17 +206,16 @@ class TabManager(
     fun rebuildAfterCrash(tab: Tab) {
         val wasActive = (active == tab)
         val savedUrl = tab.url.takeUnless { it.isBlank() } ?: NEW_TAB_URL
-        runCatching {
-            (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
-            tab.webView.destroy()
-        }
+        destroyWebViewSafely(tab.webView)
         val fresh = createWebView()
-        tab.host.removeAllViews()
-        tab.host.addView(
-            fresh,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-        )
+        runCatching { tab.host.removeAllViews() }
+        runCatching {
+            tab.host.addView(
+                fresh,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
         tab.webView = fresh
         fresh.tag = tab
         if (wasActive) runCatching { fresh.onResume() }
