@@ -51,6 +51,10 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     override fun onCreate(savedInstanceState: Bundle?) {
         installCrashLogger()
         super.onCreate(savedInstanceState)
+        // Pre-warm the WebView renderer process so the first navigation
+        // doesn't pay cold-start cost (renderer fork + V8 init + GPU warm-up
+        // is what makes the first video page so fragile).
+        runCatching { android.webkit.WebView(applicationContext) }
         setContentView(R.layout.activity_main)
 
         readAndClearLastCrash()?.let { showCrashDialog(it) }

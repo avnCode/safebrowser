@@ -42,6 +42,8 @@ class Tab(
     var url: String = ""
     var pageTitle: String = "New Tab"
     var expectedOrigin: String? = null
+    /** Set when the tab is hibernated; loaded back when re-activated. */
+    var hibernatedUrl: String? = null
 }
 
 class TabManager(
@@ -147,6 +149,11 @@ class TabManager(
         runCatching { (tab.host.parent as? ViewGroup)?.removeView(tab.host) }
         runCatching { container.addView(tab.host) }
         runCatching { tab.webView.onResume() }
+        // Wake hibernated tab.
+        tab.hibernatedUrl?.let { saved ->
+            tab.hibernatedUrl = null
+            runCatching { tab.webView.loadUrl(saved) }
+        }
         callbacks.onActiveChanged(tab)
     }
 
@@ -195,7 +202,30 @@ class TabManager(
                 t.webView.clearCache(level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE)
                 t.webView.freeMemory()
             }
+            // On real memory pressure, hibernate the tab — keep its URL,
+            // unload the page itself.  This is the single biggest renderer
+            // memory win because all WebViews share one renderer process.
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE) hibernate(t)
         }
+    }
+
+    /** Hibernate an inactive tab: park the WebView on about:blank, remember the URL. */
+    fun hibernate(tab: Tab) {
+        if (tab == active) return
+        if (tab.hibernatedUrl != null) return
+        val u = tab.url
+        if (u.isBlank() || u == NEW_TAB_URL || u.startsWith("about:")) return
+        tab.hibernatedUrl = u
+        runCatching {
+            tab.webView.stopLoading()
+            tab.webView.loadUrl("about:blank")
+            tab.webView.clearHistory()
+        }
+    }
+
+    /** Hibernate every inactive tab right now (called when active tab loads heavy content). */
+    fun hibernateAllInactive() {
+        for (t in tabs) if (t != active) hibernate(t)
     }
 
     /**
@@ -233,6 +263,15 @@ class TabManager(
         // this the WebView can fall back to a software layer (especially when
         // wrapped in SwipeRefreshLayout), which OOMs the renderer on video.
         wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        // Tell Android: our renderer is IMPORTANT and should NOT be reaped
+        // just because the activity is briefly off-screen.  This is the
+        // single most effective lever we have against "page died randomly" —
+        // by default the OS treats WebView renderers as discardable work.
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            runCatching {
+                wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+            }
+        }
         wv.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
