@@ -58,7 +58,62 @@ android/
 
 ---
 
-## Installation (no Play Store, just sideload)
+## 🟢 Easiest install: GitHub Actions builds the APK for you
+
+The workflow lives at [`.github/workflows/android.yml`](../.github/workflows/android.yml).
+
+### Every build (~3 min)
+
+1. Push any change to `android/**` (or hit **Run workflow** manually in the
+   Actions tab). GitHub starts a build automatically.
+2. Open your repo → **Actions** tab → click the latest run → wait for the
+   green check.
+3. Scroll to **Artifacts** at the bottom of the run → download
+   **`SafeBrowser-debug-apk`** (a zip containing `app-debug.apk`).
+4. Get the APK onto your phone — pick whichever is easiest:
+   - Email it to yourself, open the attachment on the phone.
+   - Drop it in Google Drive / Dropbox, download on the phone.
+   - Or **publish a Release** with a direct link (see below).
+5. On the phone tap the APK → Android warns *"unknown source"* →
+   **Settings → Allow from this source → Install**.
+
+### One-tap install link (recommended for repeat updates)
+
+Tag your commit and the workflow will auto-publish a GitHub Release with
+the APK attached as a direct download link:
+
+```bash
+git tag v1.0.1
+git push --tags
+```
+
+Then on your phone open
+`https://github.com/<YOUR-USERNAME>/<YOUR-REPO>/releases/latest`,
+tap the APK → Install. Bookmark this URL — every new tag becomes an
+instant update.
+
+### Trigger a build without pushing code
+
+Repo → **Actions** tab → "Build Android APK" → **Run workflow** (top right) → Run.
+
+### Updating to a newer version
+
+1. Edit code on your Mac.
+2. `git add . && git commit -m "..." && git push`
+   *(or also `git tag v1.0.X && git push --tags` for a Release link)*.
+3. Wait ~3 min → download the new APK.
+4. Tap to install — Android shows *"App update"* and replaces the
+   existing one. Your bookmarks and settings are preserved.
+
+> **Signature note.** All debug APKs from the same workflow are signed
+> with the build runner's auto-generated debug key. If you ever see
+> *"App not installed (signature mismatch)"* (e.g. after switching
+> machines or rebuilding the workflow cache), just uninstall the old app
+> on the phone first, then install the new APK.
+
+---
+
+## Alternative: install with Android Studio (no GitHub needed)
 
 You only need this **once** on your Mac. Then any APK builds onto your
 phone in seconds.

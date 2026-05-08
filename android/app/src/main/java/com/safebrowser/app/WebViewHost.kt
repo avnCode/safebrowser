@@ -112,12 +112,21 @@ fun WebViewHost(vm: BrowserViewModel, modifier: Modifier = Modifier) {
 
     // Cache one WebView per tab id, lifetime tied to this composition.
     val cache = remember { mutableMapOf<Long, TabWebView>() }
-    val webView = cache.getOrPut(tab.id) {
+    val webView = cache[tab.id] ?: runCatching {
         val wv = TabWebView(tab.id, vm, ctx)
         vm.registerBack(tab.id) {
             if (wv.canGoBack()) { wv.goBack(); true } else false
         }
+        cache[tab.id] = wv
         wv
+    }.getOrElse {
+        android.util.Log.e("SafeBrowser", "WebView init failed", it)
+        androidx.compose.material3.Text(
+            "Browser engine failed to start.\n${it.javaClass.simpleName}: ${it.message}\n\n" +
+            "Open Play Store and update \"Android System WebView\".",
+            modifier = modifier,
+        )
+        return
     }
 
     DisposableEffect(tabs) {
