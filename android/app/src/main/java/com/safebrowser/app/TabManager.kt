@@ -45,6 +45,8 @@ class TabManager(
         fun onUrlChanged(tab: Tab)
         fun shouldAllowNavigation(tab: Tab, nextUrl: String, isUserGesture: Boolean): Boolean
         fun onPopupBlocked()
+        fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback)
+        fun onHideFullscreen()
     }
 
     private var nextId = 1L
@@ -140,6 +142,14 @@ class TabManager(
                 val tab = view.tag as? Tab ?: return
                 tab.pageTitle = title?.ifBlank { tab.url } ?: tab.url
                 tab.title.text = tab.pageTitle
+            }
+
+            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                callbacks.onShowFullscreen(view, callback)
+            }
+
+            override fun onHideCustomView() {
+                callbacks.onHideFullscreen()
             }
         }
 

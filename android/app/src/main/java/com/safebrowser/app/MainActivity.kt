@@ -7,8 +7,11 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.webkit.WebChromeClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -17,6 +20,9 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -107,6 +113,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (fullscreenView != null) { onHideFullscreen(); return true }
             val wv = tabs.active?.webView
             if (wv != null && wv.canGoBack()) { wv.goBack(); return true }
             // Otherwise close the active tab; if it was the last one a new home opens.
@@ -158,6 +165,12 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             return false
         }
 
+        // Allow-list — silent, no prompt.
+        if (settings.isAllowed(nextOrigin)) {
+            tab.expectedOrigin = nextOrigin ?: tab.expectedOrigin
+            return true
+        }
+
         if (expected == null) {
             tab.expectedOrigin = nextOrigin ?: tab.expectedOrigin
             return true
@@ -181,6 +194,48 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         Toast.makeText(this, "Popup blocked", Toast.LENGTH_SHORT).show()
     }
 
+    // ---- HTML5 fullscreen --------------------------------------------------
+
+    private var fullscreenView: View? = null
+    private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
+
+    override fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback) {
+        if (fullscreenView != null) {
+            callback.onCustomViewHidden()
+            return
+        }
+        fullscreenView = view
+        fullscreenCallback = callback
+        val decor = window.decorView as ViewGroup
+        decor.addView(
+            view,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Hide system bars (immersive).
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val ctrl = WindowInsetsControllerCompat(window, window.decorView)
+        ctrl.hide(WindowInsetsCompat.Type.systemBars())
+        ctrl.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+
+    override fun onHideFullscreen() {
+        val v = fullscreenView ?: return
+        val decor = window.decorView as ViewGroup
+        decor.removeView(v)
+        fullscreenView = null
+        runCatching { fullscreenCallback?.onCustomViewHidden() }
+        fullscreenCallback = null
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        val ctrl = WindowInsetsControllerCompat(window, window.decorView)
+        ctrl.show(WindowInsetsCompat.Type.systemBars())
+    }
+
     private fun tryOpenExternal(url: String): Boolean {
         return try {
             val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
@@ -199,20 +254,35 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             "You tapped a link that goes to a different site."
         else
             "This page tried to send you to a different site."
+        val items = arrayOf(
+            "Allow once",
+            "Always allow this site",
+            "Open in new tab",
+            "Block this site",
+        )
         AlertDialog.Builder(this)
             .setTitle("Cross-site navigation")
-            .setMessage("From: $expected\n\nTo: $nextUrl\n\n$reason\n\nAllow?")
-            .setPositiveButton("Allow once") { _, _ ->
-                tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
-                tab.webView.loadUrl(nextUrl)
+            .setMessage("From: $expected\nTo: $nextUrl\n\n$reason")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
+                        tab.webView.loadUrl(nextUrl)
+                    }
+                    1 -> {
+                        settings.allowOrigin(nextOrigin)
+                        Toast.makeText(this, "Always allowing $nextOrigin", Toast.LENGTH_SHORT).show()
+                        tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
+                        tab.webView.loadUrl(nextUrl)
+                    }
+                    2 -> tabs.newTab(nextUrl)
+                    3 -> {
+                        settings.blockOrigin(nextOrigin)
+                        Toast.makeText(this, "Blocked $nextOrigin", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
-            .setNeutralButton("Open in new tab") { _, _ ->
-                tabs.newTab(nextUrl)
-            }
-            .setNegativeButton("Block site") { _, _ ->
-                settings.blockOrigin(nextOrigin)
-                Toast.makeText(this, "Blocked $nextOrigin", Toast.LENGTH_SHORT).show()
-            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 

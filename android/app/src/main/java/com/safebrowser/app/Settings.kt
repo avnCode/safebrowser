@@ -33,4 +33,20 @@ class Settings(ctx: Context) {
             sp.edit().putStringSet("blocked_origins", set).apply()
         }
     }
+
+    fun allowedOrigins(): Set<String> =
+        sp.getStringSet("allowed_origins", emptySet()) ?: emptySet()
+
+    fun isAllowed(origin: String?): Boolean {
+        if (origin.isNullOrBlank()) return false
+        return allowedOrigins().contains(origin)
+    }
+
+    fun allowOrigin(origin: String?) {
+        if (origin.isNullOrBlank()) return
+        val set = allowedOrigins().toMutableSet()
+        if (set.add(origin)) {
+            sp.edit().putStringSet("allowed_origins", set).apply()
+        }
+    }
 }
