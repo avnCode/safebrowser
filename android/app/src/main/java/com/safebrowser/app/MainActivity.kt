@@ -199,28 +199,20 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             "You tapped a link that goes to a different site."
         else
             "This page tried to send you to a different site."
-        val items = arrayOf(
-            "Allow once (this tab)",
-            "Open in new tab",
-            "Block this site forever",
-        )
         AlertDialog.Builder(this)
             .setTitle("Cross-site navigation")
-            .setMessage("From: $expected\n\nTo: $nextUrl\n\n$reason")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> {
-                        tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
-                        tab.webView.loadUrl(nextUrl)
-                    }
-                    1 -> tabs.newTab(nextUrl)
-                    2 -> {
-                        settings.blockOrigin(nextOrigin)
-                        Toast.makeText(this, "Blocked $nextOrigin", Toast.LENGTH_SHORT).show()
-                    }
-                }
+            .setMessage("From: $expected\n\nTo: $nextUrl\n\n$reason\n\nAllow?")
+            .setPositiveButton("Allow once") { _, _ ->
+                tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
+                tab.webView.loadUrl(nextUrl)
             }
-            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Open in new tab") { _, _ ->
+                tabs.newTab(nextUrl)
+            }
+            .setNegativeButton("Block site") { _, _ ->
+                settings.blockOrigin(nextOrigin)
+                Toast.makeText(this, "Blocked $nextOrigin", Toast.LENGTH_SHORT).show()
+            }
             .show()
     }
 
