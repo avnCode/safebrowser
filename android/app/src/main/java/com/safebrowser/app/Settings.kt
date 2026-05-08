@@ -15,6 +15,10 @@ class Settings(ctx: Context) {
         get() = sp.getBoolean("ad_block", true)
         set(value) { sp.edit().putBoolean("ad_block", value).apply() }
 
+    var historyEnabled: Boolean
+        get() = sp.getBoolean("history", true)
+        set(value) { sp.edit().putBoolean("history", value).apply() }
+
     fun blockedOrigins(): Set<String> =
         sp.getStringSet("blocked_origins", emptySet()) ?: emptySet()
 

@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     private lateinit var btnReload: ImageButton
     private lateinit var btnNewTab: ImageButton
     private lateinit var btnShield: ImageButton
+    private lateinit var btnBookmark: ImageButton
     private lateinit var btnMore: ImageButton
     private lateinit var progress: ProgressBar
     private lateinit var webContainer: FrameLayout
@@ -43,6 +44,8 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
 
     private lateinit var settings: Settings
     private lateinit var adBlocker: AdBlocker
+    private lateinit var bookmarks: Bookmarks
+    private lateinit var history: History
     private lateinit var tabs: TabManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,12 +57,15 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
 
         settings    = Settings(this)
         adBlocker   = AdBlocker(this, settings)
+        bookmarks   = Bookmarks(this)
+        history     = History(this)
         addr        = findViewById(R.id.address)
         btnBack     = findViewById(R.id.btn_back)
         btnFwd      = findViewById(R.id.btn_forward)
         btnReload   = findViewById(R.id.btn_reload)
         btnNewTab   = findViewById(R.id.btn_new_tab)
         btnShield   = findViewById(R.id.btn_shield)
+        btnBookmark = findViewById(R.id.btn_bookmark)
         btnMore     = findViewById(R.id.btn_more)
         progress    = findViewById(R.id.progress)
         webContainer= findViewById(R.id.web_container)
@@ -72,6 +78,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         btnReload.setOnClickListener { tabs.active?.webView?.reload() }
         btnNewTab.setOnClickListener { tabs.newTab() }
         btnShield.setOnClickListener { showShieldDialog() }
+        btnBookmark.setOnClickListener { toggleBookmark() }
         btnMore.setOnClickListener   { showOverflowMenu(it) }
 
         addr.setOnEditorActionListener { _, actionId, event ->
@@ -188,16 +195,101 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             .show()
     }
 
+    // ---- Bookmarks / history ------------------------------------------
+
+    private fun refreshBookmarkIcon() {
+        val url = tabs.active?.url ?: ""
+        btnBookmark.setImageResource(
+            if (bookmarks.isBookmarked(url)) R.drawable.ic_star else R.drawable.ic_star_outline
+        )
+    }
+
+    private fun toggleBookmark() {
+        val tab = tabs.active ?: return
+        val url = tab.url
+        if (url.isBlank() || url.startsWith("file://")) {
+            Toast.makeText(this, "Nothing to bookmark", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (bookmarks.isBookmarked(url)) {
+            bookmarks.remove(url)
+            Toast.makeText(this, "Removed bookmark", Toast.LENGTH_SHORT).show()
+        } else {
+            bookmarks.add(url, tab.pageTitle)
+            Toast.makeText(this, "Bookmarked", Toast.LENGTH_SHORT).show()
+        }
+        refreshBookmarkIcon()
+    }
+
+    private fun showBookmarks() {
+        val list = bookmarks.list()
+        if (list.isEmpty()) { Toast.makeText(this, "No bookmarks", Toast.LENGTH_SHORT).show(); return }
+        val labels = list.map { "${it.title}\n${it.url}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Bookmarks")
+            .setItems(labels) { _, idx ->
+                val item = list[idx]
+                val tab = tabs.active ?: tabs.newTab(item.url)
+                tab.expectedOrigin = UrlNormalizer.origin(item.url) ?: tab.expectedOrigin
+                tab.webView.loadUrl(item.url)
+            }
+            .setNeutralButton("Clear all") { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle("Clear all bookmarks?")
+                    .setPositiveButton("Clear") { _, _ ->
+                        bookmarks.clear()
+                        refreshBookmarkIcon()
+                        Toast.makeText(this, "Bookmarks cleared", Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showHistory() {
+        val list = history.list()
+        if (list.isEmpty()) { Toast.makeText(this, "No history", Toast.LENGTH_SHORT).show(); return }
+        val labels = list.map { "${it.title}\n${it.url}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("History")
+            .setItems(labels) { _, idx ->
+                val item = list[idx]
+                val tab = tabs.active ?: tabs.newTab(item.url)
+                tab.expectedOrigin = UrlNormalizer.origin(item.url) ?: tab.expectedOrigin
+                tab.webView.loadUrl(item.url)
+            }
+            .setNeutralButton("Clear history") { _, _ -> confirmClearHistory() }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun confirmClearHistory() {
+        AlertDialog.Builder(this)
+            .setTitle("Clear all history?")
+            .setPositiveButton("Clear") { _, _ ->
+                history.clear()
+                Toast.makeText(this, "History cleared", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun showOverflowMenu(anchor: View) {
         val menu = PopupMenu(this, anchor)
         val isStrict = settings.mode == Mode.Strict
         menu.menu.add(0, 1, 0, if (isStrict) "Mode: Strict (tap for Lenient)" else "Mode: Lenient (tap for Strict)")
         menu.menu.add(0, 2, 1, if (settings.adBlockEnabled) "Ad blocker: ON" else "Ad blocker: OFF")
-        menu.menu.add(0, 3, 2, "New tab")
-        menu.menu.add(0, 4, 3, "Close current tab")
-        menu.menu.add(0, 5, 4, "Reload")
-        menu.menu.add(0, 6, 5, "Copy URL")
-        menu.menu.add(0, 7, 6, "Share")
+        menu.menu.add(0, 8, 2, if (settings.historyEnabled) "History: ON" else "History: OFF")
+        menu.menu.add(0, 9, 3, "Bookmarks")
+        menu.menu.add(0, 10, 4, "History")
+        menu.menu.add(0, 11, 5, "Clear history")
+        menu.menu.add(0, 3, 6, "New tab")
+        menu.menu.add(0, 4, 7, "Close current tab")
+        menu.menu.add(0, 5, 8, "Reload")
+        menu.menu.add(0, 6, 9, "Copy URL")
+        menu.menu.add(0, 7, 10, "Share")
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> {
@@ -230,6 +322,15 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
                     }
                     startActivity(Intent.createChooser(send, "Share"))
                 }
+                8 -> {
+                    settings.historyEnabled = !settings.historyEnabled
+                    Toast.makeText(this,
+                        "History ${if (settings.historyEnabled) "ON" else "OFF"}",
+                        Toast.LENGTH_SHORT).show()
+                }
+                9 -> showBookmarks()
+                10 -> showHistory()
+                11 -> confirmClearHistory()
             }
             true
         }
@@ -246,6 +347,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         if (tab == null) return
         addr.setText(if (tab.url.startsWith("file://")) "" else tab.url)
         progress.visibility = View.GONE
+        refreshBookmarkIcon()
     }
 
     override fun onProgress(tab: Tab, newProgress: Int) {
@@ -262,6 +364,8 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         if (tab == tabs.active && !addr.isFocused) {
             addr.setText(if (tab.url.startsWith("file://")) "" else tab.url)
         }
+        if (tab == tabs.active) refreshBookmarkIcon()
+        if (settings.historyEnabled) history.add(tab.url, tab.pageTitle)
     }
 
     override fun shouldAllowNavigation(tab: Tab, nextUrl: String, isUserGesture: Boolean): Boolean {
