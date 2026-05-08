@@ -119,6 +119,27 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         intent.dataString?.takeIf { it.isNotBlank() }?.let { tabs.newTab(it) }
     }
 
+    override fun onPause() {
+        super.onPause()
+        runCatching { tabs.active?.webView?.onPause(); tabs.active?.webView?.pauseTimers() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        runCatching { tabs.active?.webView?.onResume(); tabs.active?.webView?.resumeTimers() }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // OS is asking us to free memory.  Drop disk cache from inactive WebViews
+        // and trigger Java GC.
+        if (level >= TRIM_MEMORY_RUNNING_LOW) {
+            runCatching {
+                for (t in tabs.tabs) if (t != tabs.active) t.webView.clearCache(false)
+            }
+        }
+    }
+
     private fun submitAddress() {
         val url = UrlNormalizer.normalize(addr.text.toString())
         if (url.isBlank()) return

@@ -15,6 +15,8 @@
         android:usesCleartextTraffic="false"
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="true"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
         android:theme="@style/Theme.SafeBrowser"
         tools:targetApi="33">
 

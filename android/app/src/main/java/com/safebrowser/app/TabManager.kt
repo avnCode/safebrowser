@@ -84,11 +84,20 @@ class TabManager(
         active?.let {
             it.chip.isSelected = false
             container.removeView(it.webView)
+            // Pause timers and media on the tab we are leaving.
+            runCatching {
+                it.webView.onPause()
+                it.webView.pauseTimers()
+            }
         }
         active = tab
         tab.chip.isSelected = true
         if (tab.webView.parent != null) (tab.webView.parent as ViewGroup).removeView(tab.webView)
         container.addView(tab.webView)
+        runCatching {
+            tab.webView.onResume()
+            tab.webView.resumeTimers()
+        }
         callbacks.onActiveChanged(tab)
     }
 
@@ -122,8 +131,12 @@ class TabManager(
             displayZoomControls = false
             javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
-            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            // Many video sites serve segments over http from https pages; blocking
+            // outright freezes the player.  COMPATIBILITY lets non-script subresources
+            // through but still blocks active mixed content (scripts/iframes).
+            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             cacheMode = WebSettings.LOAD_DEFAULT
+            mediaPlaybackRequiresUserGesture = false
             userAgentString = CHROME_UA
         }
 
