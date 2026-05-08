@@ -81,6 +81,12 @@ class TabManager(
         }.getOrDefault("")
     }
 
+    private val seekThrottleJs: String by lazy {
+        runCatching {
+            ctx.assets.open("seek_throttle.js").bufferedReader().use { it.readText() }
+        }.getOrDefault("")
+    }
+
     fun newTab(url: String = NEW_TAB_URL, activate: Boolean = true): Tab? {
         if (tabs.size >= MAX_TABS) {
             Toast.makeText(ctx, "Tab limit ($MAX_TABS). Close one first.", Toast.LENGTH_SHORT).show()
@@ -398,6 +404,13 @@ class TabManager(
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 val tab = view.tag as? Tab ?: return
                 tab.url = url
+                // Install the seek throttle BEFORE any <video> element exists,
+                // so HTMLMediaElement.prototype.currentTime is wrapped before
+                // the player constructs its media elements.  Prevents GPU
+                // surface-pool exhaustion from rapid scrubbing.
+                if (seekThrottleJs.isNotBlank()) {
+                    view.evaluateJavascript(seekThrottleJs, null)
+                }
                 callbacks.onUrlChanged(tab)
             }
 
