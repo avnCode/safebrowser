@@ -162,16 +162,12 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             tab.expectedOrigin = nextOrigin ?: tab.expectedOrigin
             return true
         }
-        if (isUserGesture) {
-            tab.expectedOrigin = nextOrigin ?: tab.expectedOrigin
-            return true
-        }
         if (settings.mode == Mode.Lenient) {
             tab.expectedOrigin = nextOrigin ?: tab.expectedOrigin
             return true
         }
-        // Strict + cross-origin + no user gesture → prompt.
-        showRedirectDialog(tab, expected, nextUrl)
+        // Strict + cross-origin → always prompt, even on user-gesture clicks.
+        showRedirectDialog(tab, expected, nextUrl, isUserGesture)
         return false
     }
 
@@ -191,14 +187,20 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         }
     }
 
-    private fun showRedirectDialog(tab: Tab, expected: String, nextUrl: String) {
+    private fun showRedirectDialog(tab: Tab, expected: String, nextUrl: String, isUserGesture: Boolean) {
+        val reason = if (isUserGesture)
+            "You tapped a link that goes to a different site."
+        else
+            "This page tried to send you to a different site."
         AlertDialog.Builder(this)
-            .setTitle("Cross-site redirect blocked")
-            .setMessage("From: $expected\n\nTo: $nextUrl\n\n" +
-                        "This page tried to send you to a different site. Allow once?")
+            .setTitle("Cross-site navigation")
+            .setMessage("From: $expected\n\nTo: $nextUrl\n\n$reason\n\nAllow?")
             .setPositiveButton("Allow once") { _, _ ->
                 tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
                 tab.webView.loadUrl(nextUrl)
+            }
+            .setNeutralButton("Open in new tab") { _, _ ->
+                tabs.newTab(nextUrl)
             }
             .setNegativeButton("Block", null)
             .show()
