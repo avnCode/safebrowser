@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="wrap_content"
-    android:layout_height="wrap_content"
+    android:layout_height="34dp"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:paddingStart="12dp"
+    android:paddingStart="14dp"
     android:paddingEnd="6dp"
-    android:layout_marginEnd="4dp"
-    android:minWidth="120dp"
-    android:maxWidth="180dp"
+    android:layout_marginEnd="6dp"
+    android:minWidth="140dp"
+    android:maxWidth="220dp"
     android:background="@drawable/tab_bg">
 
     <TextView
@@ -19,13 +19,15 @@
         android:singleLine="true"
         android:ellipsize="end"
         android:textSize="13sp"
+        android:textColor="?attr/colorOnSurface"
         android:text="New Tab" />
 
     <ImageButton
         android:id="@+id/tab_close"
-        android:layout_width="28dp"
-        android:layout_height="28dp"
-        android:src="@android:drawable/ic_menu_close_clear_cancel"
+        android:layout_width="26dp"
+        android:layout_height="26dp"
+        android:layout_marginStart="4dp"
+        android:src="@drawable/ic_close"
         android:background="?attr/selectableItemBackgroundBorderless"
         android:contentDescription="Close tab" />
 </LinearLayout>

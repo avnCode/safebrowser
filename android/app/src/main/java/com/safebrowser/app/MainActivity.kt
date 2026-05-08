@@ -12,11 +12,11 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebChromeClient
-import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -34,14 +34,15 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     private lateinit var btnBack: ImageButton
     private lateinit var btnFwd: ImageButton
     private lateinit var btnReload: ImageButton
-    private lateinit var btnGo: Button
     private lateinit var btnNewTab: ImageButton
-    private lateinit var btnMode: Button
+    private lateinit var btnShield: ImageButton
+    private lateinit var btnMore: ImageButton
     private lateinit var progress: ProgressBar
     private lateinit var webContainer: FrameLayout
     private lateinit var tabStrip: LinearLayout
 
     private lateinit var settings: Settings
+    private lateinit var adBlocker: AdBlocker
     private lateinit var tabs: TabManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,29 +53,26 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         readAndClearLastCrash()?.let { showCrashDialog(it) }
 
         settings    = Settings(this)
+        adBlocker   = AdBlocker(this, settings)
         addr        = findViewById(R.id.address)
         btnBack     = findViewById(R.id.btn_back)
         btnFwd      = findViewById(R.id.btn_forward)
         btnReload   = findViewById(R.id.btn_reload)
-        btnGo       = findViewById(R.id.btn_go)
         btnNewTab   = findViewById(R.id.btn_new_tab)
-        btnMode     = findViewById(R.id.btn_mode)
+        btnShield   = findViewById(R.id.btn_shield)
+        btnMore     = findViewById(R.id.btn_more)
         progress    = findViewById(R.id.progress)
         webContainer= findViewById(R.id.web_container)
         tabStrip    = findViewById(R.id.tab_strip)
 
-        tabs = TabManager(this, webContainer, tabStrip, this)
+        tabs = TabManager(this, webContainer, tabStrip, this, adBlocker)
 
         btnBack.setOnClickListener   { tabs.active?.webView?.takeIf { it.canGoBack() }?.goBack() }
         btnFwd.setOnClickListener    { tabs.active?.webView?.takeIf { it.canGoForward() }?.goForward() }
         btnReload.setOnClickListener { tabs.active?.webView?.reload() }
-        btnGo.setOnClickListener     { submitAddress() }
         btnNewTab.setOnClickListener { tabs.newTab() }
-        btnMode.setOnClickListener   {
-            settings.mode = if (settings.mode == Mode.Strict) Mode.Lenient else Mode.Strict
-            refreshModeButton()
-            Toast.makeText(this, "Mode: ${settings.mode.name}", Toast.LENGTH_SHORT).show()
-        }
+        btnShield.setOnClickListener { showShieldDialog() }
+        btnMore.setOnClickListener   { showOverflowMenu(it) }
 
         addr.setOnEditorActionListener { _, actionId, event ->
             val isGo = actionId == EditorInfo.IME_ACTION_GO ||
@@ -83,7 +81,10 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             if (isGo) { submitAddress(); true } else false
         }
 
-        refreshModeButton()
+        // Tap address bar selects all → easier to type a new URL.
+        addr.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) addr.selectAll() }
+
+        adBlocker.enabled = settings.adBlockEnabled
         tabs.newTab(NEW_TAB_URL, activate = true)
 
         // Predictive-back / hardware back: walk WebView history first.
@@ -125,7 +126,114 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     }
 
     private fun refreshModeButton() {
-        btnMode.text = settings.mode.name
+        // No-op: mode is shown in the overflow menu now.
+    }
+
+    private fun showShieldDialog() {
+        val sessionBlocked = adBlocker.blockedThisSession
+        val items = arrayOf(
+            if (settings.adBlockEnabled) "Disable ad blocker" else "Enable ad blocker",
+            "Manage allowed sites (${settings.allowedOrigins().size})",
+            "Manage blocked sites (${settings.blockedOrigins().size})",
+        )
+        AlertDialog.Builder(this)
+            .setTitle("SafeBrowser")
+            .setMessage("Ad blocker: ${if (settings.adBlockEnabled) "ON" else "OFF"}\n" +
+                        "Blocked this session: $sessionBlocked\n" +
+                        "Mode: ${settings.mode.name}")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        settings.adBlockEnabled = !settings.adBlockEnabled
+                        adBlocker.enabled = settings.adBlockEnabled
+                        Toast.makeText(this,
+                            "Ad blocker ${if (settings.adBlockEnabled) "enabled" else "disabled"}",
+                            Toast.LENGTH_SHORT).show()
+                    }
+                    1 -> showAllowList()
+                    2 -> showBlockList()
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showAllowList() {
+        val list = settings.allowedOrigins().toList().sorted()
+        if (list.isEmpty()) { Toast.makeText(this, "No allowed sites", Toast.LENGTH_SHORT).show(); return }
+        val arr = list.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Allowed sites \u2014 tap to remove")
+            .setItems(arr) { _, idx ->
+                val keep = list.filterIndexed { i, _ -> i != idx }.toSet()
+                getSharedPreferences("safebrowser", MODE_PRIVATE)
+                    .edit().putStringSet("allowed_origins", keep).apply()
+                Toast.makeText(this, "Removed ${arr[idx]}", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showBlockList() {
+        val list = settings.blockedOrigins().toList().sorted()
+        if (list.isEmpty()) { Toast.makeText(this, "No blocked sites", Toast.LENGTH_SHORT).show(); return }
+        val arr = list.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Blocked sites \u2014 tap to unblock")
+            .setItems(arr) { _, idx ->
+                settings.unblockOrigin(arr[idx])
+                Toast.makeText(this, "Unblocked ${arr[idx]}", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showOverflowMenu(anchor: View) {
+        val menu = PopupMenu(this, anchor)
+        val isStrict = settings.mode == Mode.Strict
+        menu.menu.add(0, 1, 0, if (isStrict) "Mode: Strict (tap for Lenient)" else "Mode: Lenient (tap for Strict)")
+        menu.menu.add(0, 2, 1, if (settings.adBlockEnabled) "Ad blocker: ON" else "Ad blocker: OFF")
+        menu.menu.add(0, 3, 2, "New tab")
+        menu.menu.add(0, 4, 3, "Close current tab")
+        menu.menu.add(0, 5, 4, "Reload")
+        menu.menu.add(0, 6, 5, "Copy URL")
+        menu.menu.add(0, 7, 6, "Share")
+        menu.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> {
+                    settings.mode = if (isStrict) Mode.Lenient else Mode.Strict
+                    Toast.makeText(this, "Mode: ${settings.mode.name}", Toast.LENGTH_SHORT).show()
+                }
+                2 -> {
+                    settings.adBlockEnabled = !settings.adBlockEnabled
+                    adBlocker.enabled = settings.adBlockEnabled
+                    Toast.makeText(this,
+                        "Ad blocker ${if (settings.adBlockEnabled) "ON" else "OFF"}",
+                        Toast.LENGTH_SHORT).show()
+                }
+                3 -> tabs.newTab()
+                4 -> tabs.active?.let { tabs.close(it) }
+                5 -> tabs.active?.webView?.reload()
+                6 -> {
+                    val url = tabs.active?.url ?: ""
+                    if (url.isNotBlank()) {
+                        val cm = getSystemService(ClipboardManager::class.java)
+                        cm?.setPrimaryClip(ClipData.newPlainText("url", url))
+                        Toast.makeText(this, "URL copied", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                7 -> {
+                    val url = tabs.active?.url ?: return@setOnMenuItemClickListener true
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, url)
+                    }
+                    startActivity(Intent.createChooser(send, "Share"))
+                }
+            }
+            true
+        }
+        menu.show()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

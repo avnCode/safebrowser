@@ -11,6 +11,10 @@ class Settings(ctx: Context) {
         get() = runCatching { Mode.valueOf(sp.getString("mode", "Strict") ?: "Strict") }.getOrDefault(Mode.Strict)
         set(value) { sp.edit().putString("mode", value.name).apply() }
 
+    var adBlockEnabled: Boolean
+        get() = sp.getBoolean("ad_block", true)
+        set(value) { sp.edit().putBoolean("ad_block", value).apply() }
+
     fun blockedOrigins(): Set<String> =
         sp.getStringSet("blocked_origins", emptySet()) ?: emptySet()
 

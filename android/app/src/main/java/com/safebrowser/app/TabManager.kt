@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -38,6 +39,7 @@ class TabManager(
     private val container: FrameLayout,
     private val tabStrip: LinearLayout,
     private val callbacks: Callbacks,
+    private val adBlocker: AdBlocker,
 ) {
     interface Callbacks {
         fun onActiveChanged(tab: Tab?)
@@ -168,6 +170,15 @@ class TabManager(
         }
 
         wv.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
+                val url = req.url?.toString()
+                if (adBlocker.shouldBlock(url)) {
+                    adBlocker.noteBlocked()
+                    return adBlocker.emptyResponse()
+                }
+                return null
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
                 val tab = view.tag as? Tab ?: return false
                 val allowed = callbacks.shouldAllowNavigation(tab, req.url.toString(), req.hasGesture())
