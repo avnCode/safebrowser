@@ -485,6 +485,11 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         Toast.makeText(this, "Popup blocked", Toast.LENGTH_SHORT).show()
     }
 
+    override fun onRendererCrashed(tab: Tab, crashed: Boolean) {
+        val reason = if (crashed) "Renderer crashed" else "Renderer killed (low memory)"
+        Toast.makeText(this, "$reason — page reloaded", Toast.LENGTH_LONG).show()
+    }
+
     override fun onLinkLongPressed(tab: Tab, linkUrl: String, imageUrl: String?) {
         val opts = mutableListOf<Pair<String, () -> Unit>>()
         opts += "Open in new tab" to { tabs.newTab(linkUrl) }

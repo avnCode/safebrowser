@@ -13,6 +13,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.RenderProcessGoneDetail
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -29,7 +30,7 @@ private const val CHROME_UA =
 
 class Tab(
     val id: Long,
-    val webView: WebView,
+    var webView: WebView,
     val host: SwipeRefreshLayout,
     val chip: View,
     val title: TextView,
@@ -60,6 +61,7 @@ class TabManager(
             url: String, userAgent: String?, contentDisposition: String?,
             mimeType: String?, contentLength: Long,
         )
+        fun onRendererCrashed(tab: Tab, crashed: Boolean)
     }
 
     private var nextId = 1L
@@ -171,6 +173,31 @@ class TabManager(
         }
     }
 
+    /**
+     * Replace a tab whose renderer process died with a fresh WebView, preserving
+     * its host wrapper, chip, id and URL.  Without this the OS kills our whole
+     * app when the WebView renderer OOMs (very common on video sites).
+     */
+    fun rebuildAfterCrash(tab: Tab) {
+        val wasActive = (active == tab)
+        val savedUrl = tab.url.takeUnless { it.isBlank() } ?: NEW_TAB_URL
+        runCatching {
+            (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
+            tab.webView.destroy()
+        }
+        val fresh = createWebView()
+        tab.host.removeAllViews()
+        tab.host.addView(
+            fresh,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        )
+        tab.webView = fresh
+        fresh.tag = tab
+        if (wasActive) runCatching { fresh.onResume(); fresh.resumeTimers() }
+        fresh.loadUrl(savedUrl)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
         val wv = WebView(ctx)
@@ -278,6 +305,21 @@ class TabManager(
                     view.evaluateJavascript(overlayZapperJs, null)
                 }
                 callbacks.onUrlChanged(tab)
+            }
+
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                // The page's process died (OOM in video decoder, GPU crash, etc.).
+                // Rebuild the WebView so the host app stays alive.  Returning true
+                // tells the framework we handled it; otherwise it kills our process.
+                val tab = view.tag as? Tab
+                val crashed = if (android.os.Build.VERSION.SDK_INT >= 26) detail.didCrash() else true
+                if (tab != null) {
+                    view.post {
+                        runCatching { rebuildAfterCrash(tab) }
+                        callbacks.onRendererCrashed(tab, crashed)
+                    }
+                }
+                return true
             }
         }
         return wv
