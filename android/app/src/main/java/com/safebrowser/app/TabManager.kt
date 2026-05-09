@@ -87,6 +87,12 @@ class TabManager(
         }.getOrDefault("")
     }
 
+    private val bufferLimitJs: String by lazy {
+        runCatching {
+            ctx.assets.open("buffer_limit.js").bufferedReader().use { it.readText() }
+        }.getOrDefault("")
+    }
+
     fun newTab(url: String = NEW_TAB_URL, activate: Boolean = true): Tab? {
         if (tabs.size >= MAX_TABS) {
             Toast.makeText(ctx, "Tab limit ($MAX_TABS). Close one first.", Toast.LENGTH_SHORT).show()
@@ -410,6 +416,13 @@ class TabManager(
                 // surface-pool exhaustion from rapid scrubbing.
                 if (seekThrottleJs.isNotBlank()) {
                     view.evaluateJavascript(seekThrottleJs, null)
+                }
+                // Cap MSE forward buffer to ~25s so the compositor's tile
+                // budget does not overflow and blank the page.  Must wrap
+                // SourceBuffer.prototype.appendBuffer before the player
+                // creates any SourceBuffer.
+                if (bufferLimitJs.isNotBlank()) {
+                    view.evaluateJavascript(bufferLimitJs, null)
                 }
                 callbacks.onUrlChanged(tab)
             }
