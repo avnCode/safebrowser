@@ -105,6 +105,17 @@ class TabManager(
         }.getOrDefault("")
     }
 
+    /** Unregisters all Service Workers so they stop caching resources. */
+    private val swUnregisterJs: String by lazy {
+        """(function(){try{if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(function(regs){regs.forEach(function(r){r.unregister();});});}}catch(e){}})();"""
+    }
+
+    private val spaMonitorJs: String by lazy {
+        runCatching {
+            ctx.assets.open("spa_monitor.js").bufferedReader().use { it.readText() }
+        }.getOrDefault("")
+    }
+
     fun newTab(url: String = NEW_TAB_URL, activate: Boolean = true): Tab? {
         if (tabs.size >= MAX_TABS) {
             Toast.makeText(ctx, "Tab limit ($MAX_TABS). Close one first.", Toast.LENGTH_SHORT).show()
@@ -166,17 +177,22 @@ class TabManager(
         active?.let { old ->
             old.chip.isSelected = false
             runCatching { container.removeView(old.host) }
-            runCatching { old.webView.onPause() }
-            // Proactively free the old tab's memory so the renderer doesn't
-            // hold two full pages simultaneously (~512 MB cap for one process).
-            // If it's a cross-origin switch, hibernate outright to drop bfcache.
-            val oldOrigin = UrlNormalizer.origin(old.url)
-            val newOrigin = UrlNormalizer.origin(tab.hibernatedUrl ?: tab.url)
-            if (oldOrigin != newOrigin && !oldOrigin.isNullOrEmpty()) {
-                hibernate(old)
+            // evaluateJavascript() is ASYNC.  If we call onPause() or
+            // loadUrl("about:blank") immediately, the navigation cancels the
+            // pending JS and the video player is never torn down (Bug #18).
+            // Solution: run teardown, wait for the callback, THEN hibernate.
+            if (videoTeardownJs.isNotBlank()) {
+                runCatching {
+                    old.webView.evaluateJavascript(videoTeardownJs) {
+                        // Callback fires after JS finishes — media decoders,
+                        // iframes, and timers have been released.
+                        runCatching { old.webView.onPause() }
+                        hibernateBlank(old)
+                    }
+                }
             } else {
-                runCatching { old.webView.clearCache(true) }
-                runCatching { old.webView.freeMemory() }
+                runCatching { old.webView.onPause() }
+                hibernateBlank(old)
             }
         }
         active = tab
@@ -208,20 +224,60 @@ class TabManager(
     }
 
     /**
+     * Tear down ALL tabs and their WebViews.  Called from onDestroy() to
+     * ensure the renderer process releases its full memory footprint and
+     * cached pages don't survive across app restarts.
+     */
+    fun destroyAll() {
+        for (t in tabs.toList()) {
+            runCatching {
+                t.webView.stopLoading()
+                // Synchronously inject teardown (best-effort — we can't wait
+                // for the async callback during onDestroy because the activity
+                // is finishing). The loadUrl("about:blank") that follows will
+                // force the renderer to process the queued JS on its current
+                // event loop tick before starting the about:blank navigation.
+                if (videoTeardownJs.isNotBlank()) {
+                    t.webView.evaluateJavascript(videoTeardownJs, null)
+                }
+                t.webView.loadUrl("about:blank")
+                t.webView.clearHistory()
+                t.webView.clearCache(true)
+                (t.webView.parent as? ViewGroup)?.removeView(t.webView)
+                t.webView.destroy()
+            }
+        }
+        tabs.clear()
+        active = null
+    }
+
+    /**
      * Destroying a WebView while it's still loading or while a renderer
      * callback is in flight crashes the app.  Stop everything, detach
      * listeners, then destroy on the next main-loop tick.
      */
     private fun destroyWebViewSafely(wv: WebView) {
-        runCatching {
-            wv.stopLoading()
-            wv.webChromeClient = null
-            wv.webViewClient = WebViewClient()
-            wv.loadUrl("about:blank")
-            wv.clearHistory()
-            (wv.parent as? ViewGroup)?.removeView(wv)
+        runCatching { wv.stopLoading() }
+        // Run video teardown and WAIT for the callback before destroying,
+        // so MediaCodec / WASM / iframe memory is released in the renderer.
+        val doDestroy = Runnable {
+            runCatching {
+                wv.webChromeClient = null
+                wv.webViewClient = WebViewClient()
+                wv.loadUrl("about:blank")
+                wv.clearHistory()
+                wv.clearCache(true)
+                (wv.parent as? ViewGroup)?.removeView(wv)
+            }
+            wv.post { runCatching { wv.destroy() } }
         }
-        wv.post { runCatching { wv.destroy() } }
+        if (videoTeardownJs.isNotBlank()) {
+            runCatching {
+                wv.evaluateJavascript(videoTeardownJs) { doDestroy.run() }
+                return
+            }
+        }
+        doDestroy.run()
     }
 
     fun pauseActive() {
@@ -236,7 +292,6 @@ class TabManager(
         for (t in tabs) if (t != active) {
             runCatching {
                 t.webView.clearCache(level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE)
-                t.webView.freeMemory()
             }
             // On real memory pressure, hibernate the tab — keep its URL,
             // unload the page itself.  This is the single biggest renderer
@@ -252,11 +307,45 @@ class TabManager(
         val u = tab.url
         if (u.isBlank() || u == NEW_TAB_URL || u.startsWith("about:")) return
         tab.hibernatedUrl = u
+        runCatching { tab.webView.stopLoading() }
+        // evaluateJavascript is ASYNC.  We must wait for the teardown to
+        // finish BEFORE calling loadUrl("about:blank"), otherwise the
+        // navigation cancels the JS and video memory is never released.
+        if (videoTeardownJs.isNotBlank()) {
+            runCatching {
+                tab.webView.evaluateJavascript(videoTeardownJs) {
+                    hibernateFinish(tab)
+                }
+                return
+            }
+        }
+        hibernateFinish(tab)
+    }
+
+    /**
+     * Navigate to about:blank and clear caches.  Called after video teardown
+     * JS has completed (or directly if no teardown was needed).
+     */
+    private fun hibernateFinish(tab: Tab) {
         runCatching {
-            tab.webView.stopLoading()
             tab.webView.loadUrl("about:blank")
             tab.webView.clearHistory()
+            tab.webView.clearCache(true)
         }
+    }
+
+    /**
+     * Hibernate without running video teardown JS (caller already ran it).
+     * Used by doActivate() which handles teardown + callback itself.
+     */
+    private fun hibernateBlank(tab: Tab) {
+        if (tab == active) return
+        if (tab.hibernatedUrl != null) return
+        val u = tab.url
+        if (u.isBlank() || u == NEW_TAB_URL || u.startsWith("about:")) return
+        tab.hibernatedUrl = u
+        runCatching { tab.webView.stopLoading() }
+        hibernateFinish(tab)
     }
 
     /** Hibernate every inactive tab right now (called when active tab loads heavy content). */
@@ -279,10 +368,24 @@ class TabManager(
     fun resetForNavigation(tab: Tab, newUrl: String) {
         if (newUrl == "about:blank") return
         runCatching { tab.webView.stopLoading() }
-        runCatching { tab.webView.clearHistory() }
-        runCatching { tab.webView.clearCache(true) }
-        runCatching { tab.webView.clearFormData() }
-        runCatching { tab.webView.freeMemory() }
+        // Tear down video/iframes FIRST, wait for completion, THEN clear.
+        // evaluateJavascript is async — without the callback, clearHistory()
+        // and clearCache() run immediately and the teardown JS is cancelled.
+        val afterTeardown = {
+            if (swUnregisterJs.isNotBlank()) {
+                runCatching { tab.webView.evaluateJavascript(swUnregisterJs, null) }
+            }
+            runCatching { tab.webView.clearHistory() }
+            runCatching { tab.webView.clearCache(true) }
+            runCatching { tab.webView.clearFormData() }
+        }
+        if (videoTeardownJs.isNotBlank()) {
+            runCatching {
+                tab.webView.evaluateJavascript(videoTeardownJs) { afterTeardown() }
+                return
+            }
+        }
+        afterTeardown()
     }
 
     /**
@@ -297,22 +400,24 @@ class TabManager(
     fun goBackSafely(tab: Tab) {
         val wv = tab.webView
         if (!wv.canGoBack()) return
-        // 1. Tear down media elements synchronously so MediaCodec buffers
-        //    are released before the back-navigation starts.
+        // Tear down media/iframes FIRST, navigate in the callback so the
+        // teardown JS actually executes before the navigation cancels it.
         if (videoTeardownJs.isNotBlank()) {
-            runCatching { wv.evaluateJavascript(videoTeardownJs, null) }
+            runCatching {
+                wv.evaluateJavascript(videoTeardownJs) {
+                    runCatching { wv.clearCache(true) }
+                    if (wv.canGoBack()) wv.goBack()
+                    wv.postDelayed({
+                        runCatching { wv.clearHistory() }
+                    }, 600)
+                }
+                return
+            }
         }
-        // 2. Free caches that can be freed without nuking history (yet).
         runCatching { wv.clearCache(true) }
-        runCatching { wv.freeMemory() }
-        // 3. Navigate back.
         wv.goBack()
-        // 4. Once the destination page finishes loading, clear history to
-        //    evict the page we just left from bfcache. Posted so it runs
-        //    after goBack() has taken effect on the next main-loop tick.
         wv.postDelayed({
             runCatching { wv.clearHistory() }
-            runCatching { wv.freeMemory() }
         }, 600)
     }
 
@@ -485,11 +590,9 @@ class TabManager(
                 val tab = view.tag as? Tab ?: return false
                 val allowed = callbacks.shouldAllowNavigation(tab, req.url.toString(), req.hasGesture())
                 if (allowed) {
-                    // Free the previous page's renderer-side caches before
-                    // the new page starts loading. Without this, single-tab
-                    // cross-site navigation can spike memory enough for the
-                    // OS to kill the renderer mid-handoff.
-                    runCatching { view.freeMemory() }
+                    // Free the previous page's HTTP cache before the new
+                    // page starts loading.
+                    runCatching { view.clearCache(false) }
                 }
                 return !allowed
             }
@@ -517,6 +620,18 @@ class TabManager(
                 // registers its event listeners.
                 if (settings.backgroundPlaybackEnabled && visibilityOverrideJs.isNotBlank()) {
                     view.evaluateJavascript(visibilityOverrideJs, null)
+                }
+                // Hook pushState/replaceState to detect SPA navigations (episode
+                // changes on anime sites etc.) and tear down old media/iframes.
+                // Must be injected early before the SPA framework initialises.
+                if (spaMonitorJs.isNotBlank()) {
+                    view.evaluateJavascript(spaMonitorJs, null)
+                }
+                // Unregister any lingering Service Workers from previous sessions.
+                // SW caches survive clearCache() and cause pages to load from disk
+                // even after a full app restart.
+                if (swUnregisterJs.isNotBlank()) {
+                    view.evaluateJavascript(swUnregisterJs, null)
                 }
                 callbacks.onUrlChanged(tab)
             }

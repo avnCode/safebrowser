@@ -79,7 +79,6 @@ object MemoryWatchdog {
                 // OS says low memory NOW.  Drop everything we safely can.
                 tabs.hibernateAllInactive()
                 CacheJanitor.sweepNow()
-                runCatching { tabs.active?.webView?.freeMemory() }
             }
             heapRatio >= APP_HEAP_HIGH || sysRatio <= SYS_AVAIL_LOW_RATIO -> {
                 tabs.hibernateAllInactive()

@@ -70,7 +70,6 @@ object CacheJanitor {
             if (t == tabs.active) return@forEach
             runCatching {
                 t.webView.clearCache(false)        // disk cache
-                t.webView.freeMemory()             // image / V8 caches
                 t.webView.clearFormData()          // autofill memory
             }
         }

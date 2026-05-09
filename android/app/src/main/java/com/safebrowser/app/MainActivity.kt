@@ -176,6 +176,10 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         MemoryWatchdog.stop()
         CacheJanitor.stop()
         PlaybackService.stop(this)
+        // Properly tear down all WebViews so the renderer process releases
+        // its full memory footprint.  Without this, the cached pages survive
+        // the app restart via the still-running renderer + on-disk caches.
+        tabs.destroyAll()
         super.onDestroy()
     }
 
@@ -203,9 +207,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         tab.url = url
         runCatching {
             tab.webView.stopLoading()
-            // Free the previous page's image/JS caches BEFORE the new page
-            // starts loading. Without this the renderer briefly holds both.
-            tab.webView.freeMemory()
+            tab.webView.clearCache(false)
         }
         tab.webView.loadUrl(url)
         // hide keyboard
