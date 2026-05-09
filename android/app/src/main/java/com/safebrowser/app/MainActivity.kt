@@ -12,6 +12,8 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebChromeClient
+import android.text.Editable
+import android.text.TextWatcher
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -38,6 +40,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     private lateinit var btnShield: ImageButton
     private lateinit var btnBookmark: ImageButton
     private lateinit var btnMore: ImageButton
+    private lateinit var btnClearUrl: ImageButton
     private lateinit var progress: ProgressBar
     private lateinit var webContainer: FrameLayout
     private lateinit var tabStrip: LinearLayout
@@ -77,6 +80,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         btnShield   = findViewById(R.id.btn_shield)
         btnBookmark = findViewById(R.id.btn_bookmark)
         btnMore     = findViewById(R.id.btn_more)
+        btnClearUrl = findViewById(R.id.btn_clear_url)
         progress    = findViewById(R.id.progress)
         webContainer= findViewById(R.id.web_container)
         tabStrip    = findViewById(R.id.tab_strip)
@@ -85,13 +89,23 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         CacheJanitor.start(this, tabs)
         MemoryWatchdog.start(this, tabs)
 
-        btnBack.setOnClickListener   { tabs.active?.webView?.takeIf { it.canGoBack() }?.goBack() }
+        btnBack.setOnClickListener   { tabs.active?.let { if (it.webView.canGoBack()) tabs.goBackSafely(it) } }
         btnFwd.setOnClickListener    { tabs.active?.webView?.takeIf { it.canGoForward() }?.goForward() }
         btnReload.setOnClickListener { tabs.active?.webView?.reload() }
         btnNewTab.setOnClickListener { tabs.newTab() }
         btnShield.setOnClickListener { showShieldDialog() }
         btnBookmark.setOnClickListener { toggleBookmark() }
         btnMore.setOnClickListener   { showOverflowMenu(it) }
+        btnClearUrl.setOnClickListener { addr.text.clear(); addr.requestFocus() }
+
+        // Show/hide the clear (X) button as the user types.
+        addr.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                btnClearUrl.visibility = if (s.isNullOrEmpty()) View.GONE else View.VISIBLE
+            }
+        })
 
         addr.setOnEditorActionListener { _, actionId, event ->
             val isGo = actionId == EditorInfo.IME_ACTION_GO ||
@@ -110,9 +124,9 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (fullscreenView != null) { onHideFullscreen(); return }
-                val wv = tabs.active?.webView
-                if (wv != null && wv.canGoBack()) { wv.goBack(); return }
-                tabs.active?.let {
+                val tab = tabs.active
+                if (tab != null && tab.webView.canGoBack()) { tabs.goBackSafely(tab); return }
+                tab?.let {
                     if (tabs.tabs.size > 1) { tabs.close(it); return }
                 }
                 // Last tab, no history → let the system minimise.
@@ -532,7 +546,13 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
 
     override fun onRendererCrashed(tab: Tab, crashed: Boolean) {
         val reason = if (crashed) "Renderer crashed" else "Renderer killed (low memory)"
-        Toast.makeText(this, "$reason — page reloaded", Toast.LENGTH_LONG).show()
+        val bfSize = tabs.backForwardListSize()
+        val heapMb = android.os.Debug.getNativeHeapAllocatedSize() / (1024 * 1024)
+        Toast.makeText(
+            this,
+            "$reason — page reloaded\nbf=$bfSize heap=${heapMb}MB",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     override fun onLinkLongPressed(tab: Tab, linkUrl: String, imageUrl: String?) {

@@ -20,7 +20,7 @@ class Settings(ctx: Context) {
         set(value) { sp.edit().putBoolean("history", value).apply() }
 
     var overlayBlockerEnabled: Boolean
-        get() = sp.getBoolean("overlay_blocker", true)
+        get() = sp.getBoolean("overlay_blocker", false)
         set(value) { sp.edit().putBoolean("overlay_blocker", value).apply() }
 
     var backgroundPlaybackEnabled: Boolean

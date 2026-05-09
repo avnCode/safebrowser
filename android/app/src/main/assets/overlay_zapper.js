@@ -1,23 +1,24 @@
-/* SafeBrowser overlay zapper v2.
+/* SafeBrowser overlay zapper v3.
  *
- * Persistent in-page overlay/modal/popup suppressor. Runs as long as the page
- * is open. Targets:
- *   - Floating cookie/consent/GDPR banners (top, bottom, sticky).
+ * Persistent in-page overlay/modal/popup suppressor. Targets:
+ *   - Floating cookie/consent/GDPR banners.
  *   - Newsletter / subscribe / signup modals.
  *   - Paywall / metering overlays.
  *   - "Open in app" / smart-app banners.
  *   - Login / sign-in prompts (Google one-tap, Facebook, etc.).
  *   - Exit-intent and scroll-trigger popups.
  *   - role="dialog", <dialog open>, custom modal-* elements.
- *   - Generic position:fixed/sticky elements covering >=25% viewport.
+ *   - Generic position:fixed/sticky elements in the popup-size range.
  *
- * Strategy:
- *   1. Initial sweep on install.
- *   2. Throttled MutationObserver: re-sweep on DOM changes (no time limit).
- *   3. Remember each suppressed element's signature so re-injected nodes are
- *      killed instantly on next sweep.
- *   4. Re-sweep on scroll / touch / visibility change for trigger popups.
- *   5. Restore body overflow so locked pages stay scrollable.
+ * v3 improvements over v2:
+ *   - Keyword matches now ALSO require fixed/sticky + area check — no more
+ *     blindly hiding anything with "modal" or "popup" in its class.
+ *   - MIN_AREA lowered to 5% (catches small notification bars).
+ *   - MAX_AREA added at 85% (skips full-page content like episode lists).
+ *   - Elements containing <video>, dense <a> grids, or many <li> items are
+ *     excluded (likely genuine interactive content).
+ *   - Late-appearing elements (added after initial load) are treated with
+ *     higher suspicion (lower z-index threshold).
  *
  * Idempotent.
  */
@@ -26,8 +27,11 @@
   window.__sbOverlayZapper = true;
 
   var SWEEP_THROTTLE_MS = 250;
-  var MIN_AREA_RATIO    = 0.25;
+  var MIN_AREA_RATIO    = 0.05;   // 5% of viewport
+  var MAX_AREA_RATIO    = 0.85;   // 85% — skip full-page panels
   var MIN_Z_INDEX       = 100;
+  var MIN_Z_INDEX_LATE  = 50;     // lower bar for elements added after load
+  var pageLoaded        = false;
   var killedSignatures  = new Set();
 
   function viewport() {
@@ -57,7 +61,26 @@
     } catch (e) {}
   }
 
-  function isOverlayCandidate(el) {
+  /** Returns true if the element looks like genuine interactive content. */
+  function isInteractiveContent(el) {
+    try {
+      // Contains a video player — don't touch.
+      if (el.querySelector('video, audio')) return true;
+      // Dense link grid (e.g. episode list, nav menu with many items).
+      var links = el.querySelectorAll('a');
+      if (links.length > 5) return true;
+      // Many list items — likely a menu or episode list.
+      var items = el.querySelectorAll('li');
+      if (items.length > 5) return true;
+      // Contains an <input> or <textarea> (login/search form is tricky but
+      // a large form is likely the page's real UI, not a nag popup).
+      var inputs = el.querySelectorAll('input, textarea, select');
+      if (inputs.length > 2) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  function isOverlayCandidate(el, useLateThreshold) {
     if (!el || !(el instanceof HTMLElement)) return false;
     if (el.__sbHidden) return false;
     var cs;
@@ -67,12 +90,18 @@
     if (pos !== 'fixed' && pos !== 'sticky') return false;
     var z = parseInt(cs.zIndex, 10);
     if (isNaN(z)) z = 0;
-    if (z < MIN_Z_INDEX) return false;
+    var zThreshold = useLateThreshold ? MIN_Z_INDEX_LATE : MIN_Z_INDEX;
+    if (z < zThreshold) return false;
     var r;
     try { r = el.getBoundingClientRect(); } catch (e) { return false; }
     var v = viewport();
     if (v.w === 0 || v.h === 0) return false;
     var area = (r.width * r.height) / (v.w * v.h);
+    // Skip elements that are too large (likely full-page content panels).
+    if (area > MAX_AREA_RATIO) return false;
+    // Skip genuine interactive content.
+    if (isInteractiveContent(el)) return false;
+
     if (area >= MIN_AREA_RATIO) return true;
     // Wide-and-short banner stuck to top/bottom (cookie strip).
     if (r.width >= v.w * 0.9 && r.height >= 40 && r.height <= v.h * 0.35 &&
@@ -82,6 +111,8 @@
     return false;
   }
 
+  // Keyword selectors — these match common overlay class/id patterns, but
+  // v3 now requires them to ALSO pass the fixed/sticky + area check.
   var MATCH_SELECTORS = [
     '[id*="cookie" i]', '[class*="cookie" i]',
     '[id*="consent" i]', '[class*="consent" i]',
@@ -112,7 +143,9 @@
   function sweep() {
     var v = viewport();
     if (v.w === 0 || v.h === 0) return;
+    var useLate = pageLoaded;
 
+    // Re-kill previously suppressed elements that got re-injected.
     if (killedSignatures.size) {
       try {
         document.querySelectorAll('body *').forEach(function (el) {
@@ -123,33 +156,33 @@
       } catch (e) {}
     }
 
+    // Keyword matches — now gated on fixed/sticky + area check.
     try {
       document.querySelectorAll(MATCH_SELECTORS).forEach(function (el) {
         if (el.__sbHidden) return;
-        var cs;
-        try { cs = getComputedStyle(el); } catch (e) { return; }
-        if (!cs) return;
-        var pos = cs.position;
-        if (pos === 'fixed' || pos === 'sticky' ||
-            el.tagName === 'DIALOG' ||
-            el.getAttribute('role') === 'dialog' ||
-            el.getAttribute('role') === 'alertdialog') {
+        // Must be fixed/sticky AND in the overlay size range.
+        if (isOverlayCandidate(el, useLate)) {
           hide(el);
         }
       });
     } catch (e) {}
 
+    // Generic scan for fixed/sticky overlays by area.
     try {
       document.querySelectorAll('body *').forEach(function (el) {
-        if (isOverlayCandidate(el)) hide(el);
+        if (isOverlayCandidate(el, useLate)) hide(el);
       });
     } catch (e) {}
 
+    // Restore scroll if the page locked the body (common with modals).
     try {
-      document.documentElement.style.setProperty('overflow', 'auto', 'important');
-      document.body.style.setProperty('overflow', 'auto', 'important');
-      document.documentElement.style.removeProperty('position');
-      document.body.style.removeProperty('position');
+      var bs = getComputedStyle(document.body);
+      if (bs.overflow === 'hidden' || bs.position === 'fixed') {
+        document.documentElement.style.setProperty('overflow', 'auto', 'important');
+        document.body.style.setProperty('overflow', 'auto', 'important');
+        document.documentElement.style.removeProperty('position');
+        document.body.style.removeProperty('position');
+      }
     } catch (e) {}
   }
 
@@ -161,9 +194,14 @@
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', sweep, { once: true });
+    document.addEventListener('DOMContentLoaded', function () {
+      sweep();
+      // Mark page as loaded — late-appearing elements get lower z threshold.
+      setTimeout(function () { pageLoaded = true; }, 3000);
+    }, { once: true });
   } else {
     sweep();
+    setTimeout(function () { pageLoaded = true; }, 3000);
   }
 
   try {

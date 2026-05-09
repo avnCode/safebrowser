@@ -93,6 +93,17 @@
                 android:textColorHint="?attr/colorOnSurfaceVariant" />
 
             <ImageButton
+                android:id="@+id/btn_clear_url"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:src="@drawable/ic_close"
+                android:contentDescription="Clear URL"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:visibility="gone"
+                android:scaleType="centerInside"
+                android:padding="6dp" />
+
+            <ImageButton
                 android:id="@+id/btn_shield"
                 android:layout_width="36dp"
                 android:layout_height="36dp"

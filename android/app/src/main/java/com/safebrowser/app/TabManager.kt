@@ -93,6 +93,12 @@ class TabManager(
         }.getOrDefault("")
     }
 
+    private val videoTeardownJs: String by lazy {
+        runCatching {
+            ctx.assets.open("video_teardown.js").bufferedReader().use { it.readText() }
+        }.getOrDefault("")
+    }
+
     fun newTab(url: String = NEW_TAB_URL, activate: Boolean = true): Tab? {
         if (tabs.size >= MAX_TABS) {
             Toast.makeText(ctx, "Tab limit ($MAX_TABS). Close one first.", Toast.LENGTH_SHORT).show()
@@ -261,6 +267,41 @@ class TabManager(
         runCatching { tab.webView.clearFormData() }
         runCatching { tab.webView.freeMemory() }
     }
+
+    /**
+     * Go back safely: tear down video/audio elements on the current page
+     * (releasing MediaCodec surfaces) BEFORE navigating, then clear history
+     * after arrival to drop the page we just left from bfcache.
+     *
+     * Without this, bfcache holds the previous page's decoded video frames
+     * (10–150 MB) alongside the destination page, tipping the single
+     * renderer process over its ~512 MB cap.  Bug #16.
+     */
+    fun goBackSafely(tab: Tab) {
+        val wv = tab.webView
+        if (!wv.canGoBack()) return
+        // 1. Tear down media elements synchronously so MediaCodec buffers
+        //    are released before the back-navigation starts.
+        if (videoTeardownJs.isNotBlank()) {
+            runCatching { wv.evaluateJavascript(videoTeardownJs, null) }
+        }
+        // 2. Free caches that can be freed without nuking history (yet).
+        runCatching { wv.clearCache(true) }
+        runCatching { wv.freeMemory() }
+        // 3. Navigate back.
+        wv.goBack()
+        // 4. Once the destination page finishes loading, clear history to
+        //    evict the page we just left from bfcache. Posted so it runs
+        //    after goBack() has taken effect on the next main-loop tick.
+        wv.postDelayed({
+            runCatching { wv.clearHistory() }
+            runCatching { wv.freeMemory() }
+        }, 600)
+    }
+
+    /** Diagnostic: back-forward list size for the active tab. */
+    fun backForwardListSize(): Int =
+        runCatching { active?.webView?.copyBackForwardList()?.size ?: 0 }.getOrDefault(0)
 
     /**
      * Replace a tab whose renderer process died with a fresh WebView, preserving
