@@ -67,8 +67,41 @@
     MediaSource.prototype.addSourceBuffer = function (mime) {
       var sb = origAddSB.call(this, mime);
       try { sb.__sbParent = this; } catch (e) {}
+      // Track for the periodic backward-eviction sweep.
+      try { liveSourceBuffers.push(sb); } catch (e) {}
       return sb;
     };
+
+    // ---- Backward buffer cap ----
+    // The player itself usually evicts past data, but some custom players
+    // do not.  Keep at most KEEP_BEHIND_S of already-played buffer to bound
+    // renderer-resident video memory regardless of watch duration.
+    var KEEP_BEHIND_S = 10;
+    var SWEEP_MS      = 10000;
+    var liveSourceBuffers = [];
+
+    function sweepBackward() {
+      try {
+        for (var i = liveSourceBuffers.length - 1; i >= 0; i--) {
+          var sb = liveSourceBuffers[i];
+          // Drop dead refs.
+          if (!sb || !sb.__sbParent) { liveSourceBuffers.splice(i, 1); continue; }
+          if (sb.updating) continue;
+          var media = findMediaForMS(sb.__sbParent);
+          if (!media) continue;
+          var t = media.currentTime;
+          if (!isFinite(t) || t <= KEEP_BEHIND_S) continue;
+          var ranges = sb.buffered;
+          if (!ranges || ranges.length === 0) continue;
+          var firstStart = ranges.start(0);
+          var cutoff = t - KEEP_BEHIND_S;
+          if (cutoff > firstStart + 1) {
+            try { sb.remove(firstStart, cutoff); } catch (e) {}
+          }
+        }
+      } catch (e) {}
+    }
+    setInterval(sweepBackward, SWEEP_MS);
 
     function findMediaForMS(ms) {
       // Resolve the media element this MediaSource is attached to by
