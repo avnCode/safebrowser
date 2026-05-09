@@ -53,8 +53,14 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         super.onCreate(savedInstanceState)
         // Pre-warm the WebView renderer process so the first navigation
         // doesn't pay cold-start cost (renderer fork + V8 init + GPU warm-up
-        // is what makes the first video page so fragile).
-        runCatching { android.webkit.WebView(applicationContext) }
+        // is what makes the first video page so fragile).  We destroy the
+        // throwaway WebView immediately so it doesn't hold host-process
+        // memory — the renderer process itself is already warmed up and
+        // stays alive (it's a process-singleton).
+        runCatching {
+            val warm = android.webkit.WebView(applicationContext)
+            warm.destroy()
+        }
         setContentView(R.layout.activity_main)
 
         readAndClearLastCrash()?.let { showCrashDialog(it) }
@@ -77,6 +83,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
 
         tabs = TabManager(this, webContainer, tabStrip, this, adBlocker, settings)
         CacheJanitor.start(this, tabs)
+        MemoryWatchdog.start(this, tabs)
 
         btnBack.setOnClickListener   { tabs.active?.webView?.takeIf { it.canGoBack() }?.goBack() }
         btnFwd.setOnClickListener    { tabs.active?.webView?.takeIf { it.canGoForward() }?.goForward() }
@@ -137,6 +144,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     }
 
     override fun onDestroy() {
+        MemoryWatchdog.stop()
         CacheJanitor.stop()
         super.onDestroy()
     }
@@ -155,7 +163,12 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         val tab = tabs.active ?: tabs.newTab(url) ?: return
         tab.expectedOrigin = UrlNormalizer.origin(url) ?: tab.expectedOrigin
         tab.url = url
-        runCatching { tab.webView.stopLoading() }
+        runCatching {
+            tab.webView.stopLoading()
+            // Free the previous page's image/JS caches BEFORE the new page
+            // starts loading. Without this the renderer briefly holds both.
+            tab.webView.freeMemory()
+        }
         tab.webView.loadUrl(url)
         // hide keyboard
         val imm = getSystemService(InputMethodManager::class.java)

@@ -166,6 +166,7 @@ class TabManager(
             tab.hibernatedUrl = null
             runCatching { tab.webView.loadUrl(saved) }
         }
+        MemoryWatchdog.touchActive(tab.id)
         callbacks.onActiveChanged(tab)
     }
 
@@ -404,6 +405,13 @@ class TabManager(
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
                 val tab = view.tag as? Tab ?: return false
                 val allowed = callbacks.shouldAllowNavigation(tab, req.url.toString(), req.hasGesture())
+                if (allowed) {
+                    // Free the previous page's renderer-side caches before
+                    // the new page starts loading. Without this, single-tab
+                    // cross-site navigation can spike memory enough for the
+                    // OS to kill the renderer mid-handoff.
+                    runCatching { view.freeMemory() }
+                }
                 return !allowed
             }
 
