@@ -161,6 +161,14 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         val url = UrlNormalizer.normalize(addr.text.toString())
         if (url.isBlank()) return
         val tab = tabs.active ?: tabs.newTab(url) ?: return
+        // Detect cross-origin navigation BEFORE mutating tab.url. Bug #15:
+        // drop bfcache so the previous page's full DOM/JS heap doesn't sit
+        // in the shared renderer alongside the new page being parsed.
+        val curOrigin = UrlNormalizer.origin(tab.url)
+        val nxtOrigin = UrlNormalizer.origin(url)
+        if (curOrigin != nxtOrigin && !nxtOrigin.isNullOrEmpty()) {
+            tabs.resetForNavigation(tab, url)
+        }
         tab.expectedOrigin = UrlNormalizer.origin(url) ?: tab.expectedOrigin
         tab.url = url
         runCatching {
@@ -274,6 +282,11 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             .setItems(labels) { _, idx ->
                 val item = list[idx]
                 val tab = tabs.active ?: tabs.newTab(item.url) ?: return@setItems
+                val curOrigin = UrlNormalizer.origin(tab.url)
+                val nxtOrigin = UrlNormalizer.origin(item.url)
+                if (curOrigin != nxtOrigin && !nxtOrigin.isNullOrEmpty()) {
+                    tabs.resetForNavigation(tab, item.url)
+                }
                 tab.expectedOrigin = UrlNormalizer.origin(item.url) ?: tab.expectedOrigin
                 tab.webView.loadUrl(item.url)
             }
@@ -301,6 +314,11 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             .setItems(labels) { _, idx ->
                 val item = list[idx]
                 val tab = tabs.active ?: tabs.newTab(item.url) ?: return@setItems
+                val curOrigin = UrlNormalizer.origin(tab.url)
+                val nxtOrigin = UrlNormalizer.origin(item.url)
+                if (curOrigin != nxtOrigin && !nxtOrigin.isNullOrEmpty()) {
+                    tabs.resetForNavigation(tab, item.url)
+                }
                 tab.expectedOrigin = UrlNormalizer.origin(item.url) ?: tab.expectedOrigin
                 tab.webView.loadUrl(item.url)
             }
@@ -628,12 +646,15 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             .setTitle("Cross-site navigation")
             .setMessage("From: $expected\n\nTo: $nextUrl\n\n$reason")
             .setPositiveButton("Allow once") { _, _ ->
+                // Cross-origin by construction (this dialog only shows on origin change).
+                tabs.resetForNavigation(tab, nextUrl)
                 tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
                 tab.webView.loadUrl(nextUrl)
             }
             .setNeutralButton("Always allow") { _, _ ->
                 settings.allowOrigin(nextOrigin)
                 Toast.makeText(this, "Always allowing $nextOrigin", Toast.LENGTH_SHORT).show()
+                tabs.resetForNavigation(tab, nextUrl)
                 tab.expectedOrigin = UrlNormalizer.origin(nextUrl) ?: tab.expectedOrigin
                 tab.webView.loadUrl(nextUrl)
             }

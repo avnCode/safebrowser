@@ -242,6 +242,27 @@ class TabManager(
     }
 
     /**
+     * Drop bfcache + per-WebView caches before a user-initiated cross-origin
+     * navigation. The shared renderer process (~512MB cap) cannot hold the
+     * previous page's full DOM/JS heap (kept alive by bfcache) PLUS the new
+     * page being parsed/loaded — that overlap is what trips the OS killer
+     * on the A -> B -> back -> C pattern. `clearHistory()` is the only call
+     * that actually drops bfcache; `freeMemory()` and `clearCache()` do not.
+     *
+     * Caller must guarantee this is a USER-INITIATED cross-origin nav. Do
+     * not call from `shouldOverrideUrlLoading` redirect path — that breaks
+     * OAuth flows.  See Bug #15.
+     */
+    fun resetForNavigation(tab: Tab, newUrl: String) {
+        if (newUrl == "about:blank") return
+        runCatching { tab.webView.stopLoading() }
+        runCatching { tab.webView.clearHistory() }
+        runCatching { tab.webView.clearCache(true) }
+        runCatching { tab.webView.clearFormData() }
+        runCatching { tab.webView.freeMemory() }
+    }
+
+    /**
      * Replace a tab whose renderer process died with a fresh WebView, preserving
      * its host wrapper, chip, id and URL.  Without this the OS kills our whole
      * app when the WebView renderer OOMs (very common on video sites).
