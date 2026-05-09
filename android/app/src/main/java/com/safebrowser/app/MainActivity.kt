@@ -76,6 +76,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
         tabStrip    = findViewById(R.id.tab_strip)
 
         tabs = TabManager(this, webContainer, tabStrip, this, adBlocker, settings)
+        CacheJanitor.start(this, tabs)
 
         btnBack.setOnClickListener   { tabs.active?.webView?.takeIf { it.canGoBack() }?.goBack() }
         btnFwd.setOnClickListener    { tabs.active?.webView?.takeIf { it.canGoForward() }?.goForward() }
@@ -132,12 +133,19 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     override fun onResume() {
         super.onResume()
         tabs.resumeActive()
+        CacheJanitor.sweepNow()
+    }
+
+    override fun onDestroy() {
+        CacheJanitor.stop()
+        super.onDestroy()
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (level >= TRIM_MEMORY_RUNNING_LOW) {
             tabs.trimInactive(level)
+            CacheJanitor.sweepNow()
         }
     }
 
@@ -293,7 +301,8 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
             .setTitle("Clear all history?")
             .setPositiveButton("Clear") { _, _ ->
                 history.clear()
-                Toast.makeText(this, "History cleared", Toast.LENGTH_SHORT).show()
+                CacheJanitor.nukeAll()
+                Toast.makeText(this, "History and caches cleared", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
