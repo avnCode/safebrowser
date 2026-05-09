@@ -99,6 +99,12 @@ class TabManager(
         }.getOrDefault("")
     }
 
+    private val visibilityOverrideJs: String by lazy {
+        runCatching {
+            ctx.assets.open("visibility_override.js").bufferedReader().use { it.readText() }
+        }.getOrDefault("")
+    }
+
     fun newTab(url: String = NEW_TAB_URL, activate: Boolean = true): Tab? {
         if (tabs.size >= MAX_TABS) {
             Toast.makeText(ctx, "Tab limit ($MAX_TABS). Close one first.", Toast.LENGTH_SHORT).show()
@@ -157,10 +163,21 @@ class TabManager(
     private fun doActivate(tab: Tab) {
         swapping = false
         if (active == tab || !tabs.contains(tab)) return
-        active?.let {
-            it.chip.isSelected = false
-            runCatching { container.removeView(it.host) }
-            runCatching { it.webView.onPause() }
+        active?.let { old ->
+            old.chip.isSelected = false
+            runCatching { container.removeView(old.host) }
+            runCatching { old.webView.onPause() }
+            // Proactively free the old tab's memory so the renderer doesn't
+            // hold two full pages simultaneously (~512 MB cap for one process).
+            // If it's a cross-origin switch, hibernate outright to drop bfcache.
+            val oldOrigin = UrlNormalizer.origin(old.url)
+            val newOrigin = UrlNormalizer.origin(tab.hibernatedUrl ?: tab.url)
+            if (oldOrigin != newOrigin && !oldOrigin.isNullOrEmpty()) {
+                hibernate(old)
+            } else {
+                runCatching { old.webView.clearCache(true) }
+                runCatching { old.webView.freeMemory() }
+            }
         }
         active = tab
         tab.chip.isSelected = true
@@ -493,6 +510,13 @@ class TabManager(
                 // creates any SourceBuffer.
                 if (bufferLimitJs.isNotBlank()) {
                     view.evaluateJavascript(bufferLimitJs, null)
+                }
+                // Override the Page Visibility API when background playback is
+                // enabled so video players don't voluntarily pause on visibility
+                // change.  Must be injected at onPageStarted before the player
+                // registers its event listeners.
+                if (settings.backgroundPlaybackEnabled && visibilityOverrideJs.isNotBlank()) {
+                    view.evaluateJavascript(visibilityOverrideJs, null)
                 }
                 callbacks.onUrlChanged(tab)
             }

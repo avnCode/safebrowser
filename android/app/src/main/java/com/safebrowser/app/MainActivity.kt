@@ -147,12 +147,27 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
 
     override fun onPause() {
         super.onPause()
-        if (settings.backgroundPlaybackEnabled) return  // keep playing in background
+        if (settings.backgroundPlaybackEnabled) {
+            // Start foreground service to keep the process alive and prevent
+            // Samsung One UI from killing us in the background.
+            PlaybackService.start(this)
+            // Inject visibility override into the active tab so the video
+            // player doesn't voluntarily pause on visibilitychange.
+            tabs.active?.webView?.let { wv ->
+                runCatching {
+                    val js = assets.open("visibility_override.js").bufferedReader().use { it.readText() }
+                    wv.evaluateJavascript(js, null)
+                }
+            }
+            return  // keep playing in background
+        }
         tabs.pauseActive()
     }
 
     override fun onResume() {
         super.onResume()
+        // Always stop the foreground service when we're back in the foreground.
+        PlaybackService.stop(this)
         tabs.resumeActive()
         CacheJanitor.sweepNow()
     }
@@ -160,6 +175,7 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     override fun onDestroy() {
         MemoryWatchdog.stop()
         CacheJanitor.stop()
+        PlaybackService.stop(this)
         super.onDestroy()
     }
 
@@ -356,13 +372,14 @@ class MainActivity : AppCompatActivity(), TabManager.Callbacks {
     private fun toggleBackgroundPlayback() {
         if (settings.backgroundPlaybackEnabled) {
             settings.backgroundPlaybackEnabled = false
+            PlaybackService.stop(this)
             Toast.makeText(this, "Background playback OFF", Toast.LENGTH_SHORT).show()
             return
         }
         AlertDialog.Builder(this)
             .setTitle("Allow background playback?")
             .setMessage("When enabled, audio/video keeps playing after you switch away from " +
-                        "SafeBrowser. The OS may still kill the app to save battery.\n\n" +
+                        "SafeBrowser. A notification will appear while playback is active.\n\n" +
                         "Disable when finished to avoid silent battery drain.")
             .setPositiveButton("Enable") { _, _ ->
                 settings.backgroundPlaybackEnabled = true
